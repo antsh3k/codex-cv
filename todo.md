@@ -5,29 +5,29 @@ Deliver a sequential, feature-flagged subagent workflow that showcases Codex’s
 
 ## Success Criteria
 - Demo scenario: create/specify/launch a `code-reviewer` agent, observe delegated execution, and merge results back into the main conversation without regressions.
-- Feature gated: legacy behavior unchanged when `subagents.enabled` is false.
+- Feature gated: legacy behavior unchanged when `subagents.enabled` (config key) or `CODEX_SUBAGENTS_ENABLED` (env override) are false.
 - Tooling compliant: `just fmt`, scoped `just fix -p`, targeted `cargo test`, telemetry hooks, sandbox env respect.
-- Packaging readiness: pipelines and docs updated so the feature can ship in future npm releases.
+- Packaging readiness: pipelines and docs updated so the feature can ship in future npm releases (Phase 6 optional if owned by a different team).
 
 ---
 
 ## Phase 0 — Design & Research Alignment
-- [ ] **Lock guiding ADR** capturing hybrid strategy (demo blueprint + ergonomic framework + safety controls + surface alignment).
+- [ ] **Lock guiding ADR** capturing hybrid strategy (demo blueprint + ergonomic framework + safety controls + surface alignment). Document canonical config/flag naming (`subagents.enabled`, `subagents.auto_route`, `CODEX_SUBAGENTS_ENABLED`).
 - [ ] **Study Claude subagent behavior** to distill practical implications (registry, orchestrator, UX, context isolation, model/tool overrides).
 - [ ] **Map repository anchors** (modules, structs, commands) for fast navigation and code ownership notes.
 - [ ] **Define verification targets** (formatters, lints, targeted tests, packaging smoke, telemetry validation).
-- [ ] **Draft demo validation playbook** describing the end-to-end walkthrough, failure modes, and recovery steps.
+- [ ] **Draft demo validation playbook** describing the end-to-end walkthrough, expected outputs/screens, failure modes, and recovery steps.
 
 ---
 
 ## Phase 1 — Framework Scaffolding & Registry
-- [ ] **Create `codex-subagents` crate** with traits (`Subagent`, `TypedSubagent`, `ContextualSubagent`), `SubagentBuilder` (optional `model` override with session fallback), error types, seatbelt-aware helpers, and derive/attribute macros (`#[derive(Subagent)]`, `#[subagent(...)]`) covered by `trybuild` tests.
+- [ ] **Create `codex-subagents` crate** with traits (`Subagent`, `TypedSubagent`, `ContextualSubagent`), `SubagentBuilder` (optional `model: Option<String>` override with session fallback), error types, seatbelt-aware helpers, and derive/attribute macros (`#[derive(Subagent)]`, `#[subagent(...)]`) covered by `trybuild` tests.
 - [ ] **Implement `TaskContext`** (typed slots, namespaced scratchpads, read/write guards, diagnostic history, `CODEX_DEBUG_SUBAGENTS=1` serialization).
 - [ ] **Build agent parser & registry** under `codex-rs/core/src/subagents/`:
-  - `parser.rs` to parse YAML frontmatter + Markdown body, validate naming, capture metadata (name, description, tools, model, instructions, scope, path).
+  - `parser.rs` to parse YAML frontmatter + Markdown body, validate naming, capture metadata (name, description, tools, `model: Option<String>`, instructions, scope, path).
   - `registry.rs` to discover `.codex/agents/*.md` (user + project precedence), cache by mtime hash, expose reload hooks, log invalid files for `/agents` display.
   - `mod.rs` to expose public API; ensure project overrides user definitions by name.
-- [ ] **Add configuration entries** in `codex-rs/core/src/config.rs` (`subagents.enabled`, `subagents.auto_route`, fallback model/tool defaults) with feature flag defaulting to false.
+- [ ] **Add configuration entries** in `codex-rs/core/src/config.rs` (`subagents.enabled`, `subagents.auto_route`, fallback model/tool defaults) with feature flag defaulting to false; support env override `CODEX_SUBAGENTS_ENABLED` for testing/CI.
 
 ---
 
@@ -37,7 +37,7 @@ Deliver a sequential, feature-flagged subagent workflow that showcases Codex’s
 - [ ] **Router logic** (`router.rs`) to handle `/use <agent>` slash command, natural-language mentions (“Use the reviewer agent”), and optional keyword auto-routing (toggle via config).
 - [ ] **Protocol updates**: add `EventMsg::SubAgentStarted`, `SubAgentMessage`, `SubAgentCompleted` (include parent submit ID, agent name, chosen model) in Rust and TypeScript bindings; propagate to MCP message processor and exec-mode JSON contracts.
 - [ ] **Approval/tool policy wiring**: introduce allowlist enforcement before tool execution; attach agent/model labels to approval prompts; deny disallowed tool access automatically.
-- [ ] **Feature flag integration**: gate orchestrator path behind CLI flag `--use-subagents` and config entries; ensure fallback path exercises legacy flow when disabled.
+- [ ] **Feature flag integration**: gate orchestrator path behind CLI flag `--use-subagents`, config keys (`subagents.enabled`, `subagents.auto_route`), and optional env override `CODEX_SUBAGENTS_ENABLED`; ensure fallback path exercises legacy flow when disabled.
 
 ---
 
@@ -46,7 +46,7 @@ Deliver a sequential, feature-flagged subagent workflow that showcases Codex’s
 - [ ] **Code Writer subagent**: integrate repo context adapters (file summaries, diff utilities), generate `ProposedChanges`, run dry-run formatters (`just fmt`, `cargo fmt`) to verify formatting, produce rationale notes.
 - [ ] **Tester subagent**: synthesize `TestPlan`, execute via sandbox-safe harness, capture pass/fail/error states, and provide fallback messaging when execution blocked.
 - [ ] **Reviewer subagent**: run style/security heuristics, incorporate lint tooling/LLM prompts, emit `ReviewFindings` with severity taxonomy.
-- [ ] **Shared helpers**: provide pipeline utilities to transform `RequirementsSpec → ProposedChanges → TestResults → ReviewFindings` and ensure model overrides flow `SubagentSpec → SubagentBuilder → Orchestrator`.
+- [ ] **Shared helpers**: provide pipeline utilities to transform `RequirementsSpec → ProposedChanges → TestResults → ReviewFindings` and ensure model overrides flow `SubagentSpec.model → SubagentBuilder → Orchestrator` (fallback to session model on `None` or invalid override).
 
 ---
 
@@ -55,7 +55,7 @@ Deliver a sequential, feature-flagged subagent workflow that showcases Codex’s
 - [ ] **TUI rendering**: create agents command view listing specs (source, tools, model, parse errors); nest subagent transcripts in history (`.cyan()`/`.dim()` styling), add status pane counters, and label approvals with “Requested by <agent> (model: …)”.
 - [ ] **Diff tracker & apply-patch**: annotate diffs with originating agent for audits/conflict detection and enforce sequential edits (queue warnings on conflicts).
 - [ ] **MCP/notifications**: expose `subagents/list` + `subagents/run` tools, propagate new events in notifications, update docs (`docs/config.md`, onboarding) with configuration and UX instructions.
-- [ ] **Structured telemetry**: emit start/completion events (`subagent`, `model`, `duration_ms`, `outcome`, retry counts) and ensure CLI inspection surfaces recent runs.
+- [ ] **Structured telemetry**: emit start/completion events via existing telemetry module (`codex-rs/core/src/telemetry` or equivalent) with fields (`subagent`, `model`, `duration_ms`, `outcome`, retry counts); ensure CLI inspection surfaces recent runs.
 
 ---
 
@@ -63,12 +63,12 @@ Deliver a sequential, feature-flagged subagent workflow that showcases Codex’s
 - [ ] **Unit tests** for parser precedence/caching, registry reload, tool policy enforcement, orchestrator lifecycle (mocked `Codex::spawn` with custom models), macro expansion.
 - [ ] **Integration tests**: fixture repo run across full pipeline, TUI snapshot for `/agents`, CLI acceptance for `codex exec --subagent`, telemetry assertions.
 - [ ] **Sandbox & approval audits**: verify allowlists, ensure sandbox env (`CODEX_SANDBOX_*`) respected, confirm approval policies align with instructions.
-- [ ] **Manual demo script**: rehearse code-reviewer.md scenario (commands, approvals, transcript review) and capture recordings/screens for documentation.
-- [ ] **Telemetry dashboards**: build charts for success/failure rates, average latency, per-model usage.
+- [ ] **Manual demo script**: rehearse code-reviewer.md scenario with expected outputs (commands, approvals, transcript screenshots) and capture recordings/screens for documentation.
+- [ ] **Telemetry dashboards**: build charts for success/failure rates, average latency, per-model usage using existing observability tooling.
 
 ---
 
-## Phase 6 — Packaging & Release Enablement
+## Phase 6 — Packaging & Release Enablement *(optional; coordinate with distribution owners)*
 - [ ] **Pipeline alignment**: ensure `pnpm`/`just` workflows build Rust artifacts before npm packaging; include subagent assets in distribution.
 - [ ] **API exposure**: surface subagent metadata/commands through npm TypeScript API where relevant.
 - [ ] **Reproducible builds**: validate binaries across macOS/Linux/Windows with subagent feature toggled on/off.
@@ -78,7 +78,7 @@ Deliver a sequential, feature-flagged subagent workflow that showcases Codex’s
 ---
 
 ## Rollout Management
-- [ ] Maintain feature flag (`subagents.enabled`) default false; enable internally post-regression tests.
+- [ ] Maintain feature flag (`subagents.enabled` / `CODEX_SUBAGENTS_ENABLED`) default false; enable internally post-regression tests.
 - [ ] Gather pilot feedback, iterate on heuristics/UI clarity, track issues in dedicated log.
 - [ ] Flip default after stability confirmed; announce in release notes and update onboarding content.
 
