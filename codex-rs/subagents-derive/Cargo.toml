@@ -1,0 +1,15 @@
+[package]
+name = "codex-subagents-derive"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+authors = ["OpenAI"]
+
+[lib]
+proc-macro = true
+path = "src/lib.rs"
+
+[dependencies]
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true }

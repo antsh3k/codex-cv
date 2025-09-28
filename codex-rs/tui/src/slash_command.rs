@@ -22,6 +22,9 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    Agents,
+    Use,
+    SubagentStatus,
     Mcp,
     Logout,
     Quit,
@@ -42,6 +45,9 @@ impl SlashCommand {
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Agents => "list available subagents",
+            SlashCommand::Use => "run a subagent",
+            SlashCommand::SubagentStatus => "show subagent run status",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Mcp => "list configured MCP tools",
@@ -67,10 +73,13 @@ impl SlashCommand {
             | SlashCommand::Model
             | SlashCommand::Approvals
             | SlashCommand::Review
+            | SlashCommand::Use
             | SlashCommand::Logout => false,
             SlashCommand::Diff
             | SlashCommand::Mention
             | SlashCommand::Status
+            | SlashCommand::Agents
+            | SlashCommand::SubagentStatus
             | SlashCommand::Mcp
             | SlashCommand::Quit => true,
 

@@ -273,6 +273,32 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self.answer_started = false;
                 }
             }
+            EventMsg::SubAgentStarted(ev) => {
+                ts_println!(
+                    self,
+                    "[sub-agent started] {} (model: {})",
+                    ev.agent_name.style(self.bold),
+                    ev.model.clone().unwrap_or_else(|| "<inherit>".to_string())
+                );
+            }
+            EventMsg::SubAgentMessage(ev) => {
+                ts_println!(
+                    self,
+                    "[{}] {}",
+                    ev.agent_name.style(self.magenta),
+                    ev.content
+                );
+            }
+            EventMsg::SubAgentCompleted(ev) => {
+                ts_println!(
+                    self,
+                    "[sub-agent completed] {}",
+                    ev.agent_name.style(self.bold)
+                );
+                if let Some(outcome) = &ev.outcome {
+                    ts_println!(self, "  outcome: {}", outcome);
+                }
+            }
             EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id,
                 command,

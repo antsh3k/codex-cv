@@ -519,6 +519,11 @@ pub enum EventMsg {
 
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(ExitedReviewModeEvent),
+
+    /// Subagent lifecycle events.
+    SubAgentStarted(SubAgentStartedEvent),
+    SubAgentMessage(SubAgentMessageEvent),
+    SubAgentCompleted(SubAgentCompletedEvent),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
@@ -527,6 +532,32 @@ pub struct ExitedReviewModeEvent {
 }
 
 // Individual event payload types matching each `EventMsg` variant.
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct SubAgentStartedEvent {
+    pub agent_name: String,
+    pub sub_conversation_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_submit_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct SubAgentMessageEvent {
+    pub agent_name: String,
+    pub sub_conversation_id: String,
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct SubAgentCompletedEvent {
+    pub agent_name: String,
+    pub sub_conversation_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct ErrorEvent {
@@ -1138,6 +1169,12 @@ pub struct PatchApplyBeginEvent {
     pub auto_approved: bool,
     /// The changes to be applied.
     pub changes: HashMap<PathBuf, FileChange>,
+    /// Optional: name of the subagent that triggered this patch (for attribution and conflict detection).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub originating_subagent: Option<String>,
+    /// Optional: subagent conversation ID for tracking subagent-specific changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_conversation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
@@ -1150,6 +1187,12 @@ pub struct PatchApplyEndEvent {
     pub stderr: String,
     /// Whether the patch was applied successfully.
     pub success: bool,
+    /// Optional: name of the subagent that triggered this patch (matches PatchApplyBeginEvent).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub originating_subagent: Option<String>,
+    /// Optional: subagent conversation ID (matches PatchApplyBeginEvent).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_conversation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]

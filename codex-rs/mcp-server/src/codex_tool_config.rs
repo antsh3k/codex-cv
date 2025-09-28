@@ -10,8 +10,10 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use ts_rs::TS;
 
 use crate::json_to_toml::json_to_toml;
+use codex_core::subagents::CoreSubagentRegistry;
 
 /// Client-supplied configuration for a `codex` tool-call.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -96,6 +98,64 @@ impl From<CodexToolCallSandboxMode> for SandboxMode {
             CodexToolCallSandboxMode::DangerFullAccess => SandboxMode::DangerFullAccess,
         }
     }
+}
+
+/// Parameters for the `subagents/run` MCP tool call.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SubagentRunParam {
+    /// The conversation ID to run the subagent within.
+    pub conversation_id: String,
+
+    /// The name of the subagent to execute.
+    pub agent_name: String,
+
+    /// Optional prompt to provide to the subagent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+/// Response structure for the `subagents/run` MCP tool call.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentRunResponse {
+    /// The sub-conversation ID for tracking the subagent execution.
+    pub sub_conversation_id: String,
+}
+
+/// Response structure for the `subagents/list` MCP tool call.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[ts(export)]
+pub struct SubagentsListResponse {
+    /// Available subagents with their metadata.
+    pub agents: Vec<SubagentInfo>,
+}
+
+/// Information about a single subagent.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[ts(export)]
+pub struct SubagentInfo {
+    /// The name of the subagent.
+    pub name: String,
+
+    /// Optional description of what the subagent does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Optional model override for this subagent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+
+    /// List of tools this subagent is allowed to use.
+    pub tools: Vec<String>,
+
+    /// Path to the subagent specification file.
+    pub source: String,
+
+    /// Any parse errors encountered when loading this subagent.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub parse_errors: Vec<String>,
 }
 
 /// Builds a `Tool` definition (JSON schema etc.) for the Codex tool-call.
@@ -332,5 +392,45 @@ mod tests {
           "title": "Codex Reply",
         });
         assert_eq!(expected_tool_json, tool_json);
+    }
+}
+
+/// Builds a `Tool` definition for the `subagents-list` tool.
+pub(crate) fn create_tool_for_subagents_list() -> Tool {
+    Tool {
+        name: "subagents-list".to_string(),
+        description: Some("List all available subagents with their metadata".to_string()),
+        input_schema: ToolInputSchema {
+            r#type: "object".to_string(),
+            properties: Some(HashMap::new()),
+            required: None,
+            additional_properties: Some(false),
+        },
+    }
+}
+
+/// Builds a `Tool` definition for the `subagents-run` tool.
+pub(crate) fn create_tool_for_subagents_run() -> Tool {
+    let schema = SchemaSettings::draft2019_09()
+        .with(|s| {
+            s.inline_subschemas = true;
+            s.option_add_null_type = false;
+        })
+        .into_generator()
+        .into_root_schema_for::<SubagentRunParam>();
+
+    #[expect(clippy::expect_used)]
+    let schema_value =
+        serde_json::to_value(&schema).expect("Subagent run tool schema should serialise to JSON");
+
+    let tool_input_schema =
+        serde_json::from_value::<ToolInputSchema>(schema_value).unwrap_or_else(|e| {
+            panic!("failed to create subagent run Tool from schema: {e}");
+        });
+
+    Tool {
+        name: "subagents-run".to_string(),
+        description: Some("Run a specific subagent within an existing conversation".to_string()),
+        input_schema: tool_input_schema,
     }
 }

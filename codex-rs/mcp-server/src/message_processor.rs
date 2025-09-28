@@ -4,8 +4,14 @@ use std::path::PathBuf;
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_tool_config::CodexToolCallParam;
 use crate::codex_tool_config::CodexToolCallReplyParam;
+use crate::codex_tool_config::SubagentRunParam;
+use crate::codex_tool_config::SubagentsListResponse;
+use crate::codex_tool_config::SubagentRunResponse;
+use crate::codex_tool_config::SubagentInfo;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
+use crate::codex_tool_config::create_tool_for_subagents_list;
+use crate::codex_tool_config::create_tool_for_subagents_run;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_protocol::mcp_protocol::ClientRequest;
@@ -13,6 +19,8 @@ use codex_protocol::mcp_protocol::ConversationId;
 
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
+use codex_core::subagents::CoreSubagentRegistry;
+use codex_core::subagents::SubagentRunRequest;
 use codex_core::config::Config;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
@@ -322,6 +330,8 @@ impl MessageProcessor {
             tools: vec![
                 create_tool_for_codex_tool_call_param(),
                 create_tool_for_codex_tool_call_reply_param(),
+                create_tool_for_subagents_list(),
+                create_tool_for_subagents_run(),
             ],
             next_cursor: None,
         };
@@ -343,6 +353,12 @@ impl MessageProcessor {
             "codex-reply" => {
                 self.handle_tool_call_codex_session_reply(id, arguments)
                     .await
+            }
+            "subagents-list" => {
+                self.handle_tool_call_subagents_list(id, arguments).await
+            }
+            "subagents-run" => {
+                self.handle_tool_call_subagents_run(id, arguments).await
             }
             _ => {
                 let result = CallToolResult {
@@ -664,5 +680,197 @@ impl MessageProcessor {
         params: <mcp_types::LoggingMessageNotification as mcp_types::ModelContextProtocolNotification>::Params,
     ) {
         tracing::info!("notifications/message -> params: {:?}", params);
+    }
+
+    async fn handle_tool_call_subagents_list(
+        &self,
+        id: RequestId,
+        arguments: Option<serde_json::Value>
+    ) {
+        tracing::info!("subagents-list -> arguments: {:?}", arguments);
+
+        // Get the current configuration to access the subagents registry
+        let config = match self.codex_message_processor.config() {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                let error_result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: format!("Failed to load configuration: {e}"),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                };
+                self.send_response::<mcp_types::CallToolRequest>(id, error_result)
+                    .await;
+                return;
+            }
+        };
+
+        let registry = CoreSubagentRegistry::from_config(&config);
+        let registry = std::sync::Arc::new(registry);
+
+        let report = registry.reload().await;
+        let agents = registry.list().await;
+
+        let subagent_infos: Vec<SubagentInfo> = agents
+            .into_iter()
+            .map(|record| {
+                let spec = record.spec.as_ref();
+                SubagentInfo {
+                    name: spec.name().to_string(),
+                    description: spec.description().map(|s| s.to_string()),
+                    model: spec.model().map(|s| s.to_string()),
+                    tools: spec.tools().clone(),
+                    source: record.source.display().to_string(),
+                    parse_errors: Vec::new(), // TODO: Add parse errors from report
+                }
+            })
+            .collect();
+
+        let response = SubagentsListResponse {
+            agents: subagent_infos,
+        };
+
+        let result = CallToolResult {
+            content: vec![ContentBlock::TextContent(TextContent {
+                r#type: "text".to_string(),
+                text: serde_json::to_string_pretty(&response)
+                    .unwrap_or_else(|e| format!("Failed to serialize response: {e}")),
+                annotations: None,
+            })],
+            is_error: None,
+        };
+
+        self.send_response::<mcp_types::CallToolRequest>(id, result)
+            .await;
+    }
+
+    async fn handle_tool_call_subagents_run(
+        &self,
+        id: RequestId,
+        arguments: Option<serde_json::Value>
+    ) {
+        tracing::info!("subagents-run -> arguments: {:?}", arguments);
+
+        let params: SubagentRunParam = match arguments {
+            Some(args) => match serde_json::from_value(args) {
+                Ok(p) => p,
+                Err(e) => {
+                    let error_result = CallToolResult {
+                        content: vec![ContentBlock::TextContent(TextContent {
+                            r#type: "text".to_string(),
+                            text: format!("Invalid arguments for subagents-run: {e}"),
+                            annotations: None,
+                        })],
+                        is_error: Some(true),
+                    };
+                    self.send_response::<mcp_types::CallToolRequest>(id, error_result)
+                        .await;
+                    return;
+                }
+            },
+            None => {
+                let error_result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: "Missing arguments for subagents-run".to_string(),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                };
+                self.send_response::<mcp_types::CallToolRequest>(id, error_result)
+                    .await;
+                return;
+            }
+        };
+
+        // Parse conversation ID
+        let conversation_id = match ConversationId::from_string(params.conversation_id.clone()) {
+            Ok(id) => id,
+            Err(e) => {
+                let error_result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: format!("Invalid conversation ID: {e}"),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                };
+                self.send_response::<mcp_types::CallToolRequest>(id, error_result)
+                    .await;
+                return;
+            }
+        };
+
+        // Get the configuration
+        let config = match self.codex_message_processor.config() {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                let error_result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: format!("Failed to load configuration: {e}"),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                };
+                self.send_response::<mcp_types::CallToolRequest>(id, error_result)
+                    .await;
+                return;
+            }
+        };
+
+        // Create the subagent run request
+        let subagent_request = SubagentRunRequest {
+            agent_name: params.agent_name,
+            prompt: params.prompt,
+        };
+
+        // Spawn the subagent conversation using the conversation manager
+        match self.conversation_manager.spawn_subagent_conversation(config, subagent_request).await {
+            Ok((new_conversation, _spec, lifecycle_events)) => {
+                let sub_conversation_id = new_conversation.conversation_id.to_string();
+
+                // Send lifecycle events as notifications
+                for event in lifecycle_events {
+                    let notification_params = json!({
+                        "method": "codex/event",
+                        "params": event
+                    });
+                    // Note: In a real implementation, you'd send these as notifications to the MCP client
+                    tracing::debug!("Subagent lifecycle event: {:?}", notification_params);
+                }
+
+                let response = SubagentRunResponse {
+                    sub_conversation_id: sub_conversation_id.clone(),
+                };
+
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: serde_json::to_string_pretty(&response)
+                            .unwrap_or_else(|e| format!("Failed to serialize response: {e}")),
+                        annotations: None,
+                    })],
+                    is_error: None,
+                };
+
+                self.send_response::<mcp_types::CallToolRequest>(id, result)
+                    .await;
+            },
+            Err(e) => {
+                let error_result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: format!("Failed to spawn subagent: {e}"),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                };
+                self.send_response::<mcp_types::CallToolRequest>(id, error_result)
+                    .await;
+            }
+        }
     }
 }

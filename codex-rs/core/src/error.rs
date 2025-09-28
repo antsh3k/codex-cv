@@ -109,6 +109,12 @@ pub enum CodexErr {
     UnsupportedOperation(String),
 
     // -----------------------------------------------------------------
+    #[error("subagents are disabled for this configuration")]
+    SubagentsDisabled,
+
+    #[error("subagent `{0}` not found")]
+    UnknownSubagent(String),
+
     // Automatic conversions for common external error types
     // -----------------------------------------------------------------
     #[error(transparent)]
