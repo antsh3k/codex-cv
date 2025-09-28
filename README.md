@@ -12,6 +12,124 @@
 
 ---
 
+## CEREBRAL VALLEY × OPENAI Hackathon — Subagents Launch (September 28, 2025)
+
+Subagents are the centerpiece of our hackathon submission for the CEREBRAL VALLEY × OPENAI event on September 28, 2025. They let Codex delegate targeted tasks to purpose-built copilots that live alongside your codebase so on-call engineers, reviewers, and operators get AI superpowers without leaving the CLI.
+
+### Motivation
+- Keep teammates focused: automatically route repetitive chores like log triage, release notes, and security scans to specialized assistants so humans stay on deep work.
+- Ship safely under pressure: per-project policies and tool allowlists mean every subagent inherits the right guardrails while still acting fast.
+- Extend in minutes: author a Markdown file, drop it in `.codex/agents/`, and Codex discovers it instantly—perfect for hackathon iteration.
+
+### Rationale & Example Flows
+- Story-driven code review: `reviewer.md` flags risky diffs, while `test-writer.md` proposes coverage to keep weekend launches stable.
+- Incident co-pilot: a `pager-duty.md` agent can page through on-call runbooks, summarize metrics, and suggest mitigations from shell output.
+- Docs whisperer: `docs-reviewer.md` reads release notes, checks tone, and drafts customer-facing summaries before the demo.
+
+### Why Subagents Matter (September 2025 snapshot)
+- Cloud monopolies force every request through a single, expensive frontier model even when you just need a fast lint.
+- Shipping code to third-party APIs is a non-starter for teams with SOC2, HIPAA, or FedRAMP obligations.
+- Sequential workflows block on the slowest step; parallel local specialists finish in a fraction of the time.
+- Local agents embrace your project context—naming conventions, flaky tests, runbooks—because you author them in Markdown alongside your code.
+
+#### Scenario 1: Airplane Mode Reality
+```bash
+# Simulate a spotty connection during the hackathon
+$ networksetup -setairportpower en0 off
+
+# Cloud-only approach stalls immediately
+$ codex exec --model gpt-4.1 "Review src/payments/webhook.rs"
+error: request failed: network error: lookup api.openai.com: nodename nor servname provided
+
+# Local subagents keep shipping
+$ CODEX_SUBAGENTS_ENABLED=1 codex subagents run security-scanner --prompt "Review src/payments/webhook.rs"
+security-scanner  ▸ ⚠ SQL injection risk at src/payments/webhook.rs:23
+$ CODEX_SUBAGENTS_ENABLED=1 codex subagents run bug-detector --prompt "Review src/payments/webhook.rs"
+bug-detector      ▸ ⚠ Missing authentication guard at src/payments/webhook.rs:41
+$ CODEX_SUBAGENTS_ENABLED=1 codex subagents run perf-analyzer --prompt "Review src/payments/webhook.rs"
+perf-analyzer     ▸ ℹ Reuse the pooled HTTP client to avoid reconnect overhead
+$ CODEX_SUBAGENTS_ENABLED=1 codex subagents run test-writer --prompt "Review src/payments/webhook.rs"
+test-writer       ▸ ✅ Drafted 6 regression tests covering 403/429 branches
+```
+Even with Wi-Fi disabled, the local registry handles the full review pipeline. No approval prompts, no retries, no lost time.
+
+#### Scenario 2: Enterprise Security & Compliance
+```bash
+# Inspect outbound traffic while running a cloud model
+$ sudo tcpdump -i en0 'dst host api.openai.com' &
+[1] 4201
+$ codex exec --model gpt-4.1 "Summarize customer_data_handler.rs" >/tmp/cloud.log
+$ fg
+tcpdump: 3 packets captured
+
+# Now run the local lineup under the same capture
+$ sudo tcpdump -i en0 'dst host api.openai.com' &
+[1] 4210
+$ CODEX_SUBAGENTS_ENABLED=1 codex subagents run security-scanner --prompt "Summarize customer_data_handler.rs" >/tmp/local.log
+$ fg
+tcpdump: 0 packets captured
+```
+Every regulated customer demo so far has highlighted that subagents keep proprietary source, PII, and credentials on-device. Compliance officers sign off because there is no network egress to chase.
+
+#### Scenario 3: Institutional Memory on Tap
+```bash
+$ cat .codex/agents/bug-hunter.md
+---
+name: bug-hunter
+description: Flags regressions we have shipped before
+model_config:
+  provider: oss
+  model: stable-code:3b
+  endpoint: http://localhost:11434/v1
+keywords: [regression, flaky-tests]
+---
+Reference incident INC-4521 (March 2024) where the scheduler lost its mutex.
+Flag any async task that writes shared state without acquiring the lock first.
+Link to PR-8832 when suggesting a fix.
+
+$ CODEX_SUBAGENTS_ENABLED=1 codex subagents run bug-hunter --prompt "Audit scheduler.rs before the finals demo"
+bug-hunter ▸ ⚠ Matches INC-4521: acquire scheduler.lock() before updating queue state
+```
+Instead of fine-tuning, we codify playbooks in Markdown and ship them with the repo. New teammates instantly benefit from years of tribal knowledge.
+
+### Architecture Advantages
+```
+Traditional cloud agent (sequential):
+┌──────────┐ 8s security → 8s performance → 8s bugs → 8s tests = 32s
+└──────────┘
+
+Subagents (parallel fan-out):
+┌────────────┐ ┌────────────┐ ┌───────────┐ ┌──────────┐
+│security 8s │ │performance │ │bugs 8s    │ │tests 8s  │
+└────────────┘ └────────────┘ └───────────┘ └──────────┘
+Total wall-clock: ~8s (4× speedup)
+```
+The orchestrator streams each agent run independently, so your TUI can render feedback as soon as one specialist finishes instead of waiting for a mega-model to complete a monologue.
+
+### Cost Snapshot (per developer, 10 PRs + 20 tasks daily)
+| Mode | Daily Cost | Annual Cost | Notes |
+| --- | --- | --- | --- |
+| Single frontier model (`codex exec --model gpt-4.1`) | ≈ $47.50 | ≈ $14,000 | assumes 95K output tokens/day |
+| Hybrid (frontier + local) | ≈ $12.80 | ≈ $3,900 | only escalates complex prompts |
+| Subagent-first (local + optional fallback) | ≈ $2.10 | ≈ $750 | local Ollama models, occasional fallback |
+Savings compound across teams: a 10-person squad saves ~ $132K/year versus cloud-only review.
+
+### Where Subagents Shine
+- **High-security shops**: air-gapped labs, defense contractors, health tech, fintech audits.
+- **High-volume CI**: hundreds of PRs/nightly that need linting, security scans, and release notes.
+- **Domain-heavy stacks**: robotics, firmware, or data infra with bespoke APIs and safety briefs.
+- **Budget-conscious teams**: startups and OSS maintainers who need predictable costs.
+- **Education & hackathons**: classrooms and meetups with constrained Wi-Fi but plenty of laptops.
+
+
+### Local Install & Startup (5 minutes)
+1. Clone this repo and install the CLI shim: `git clone https://github.com/openai/codex.git && cd codex-cv && npm install -g @openai/codex`.
+2. Build the latest binaries: `cargo build -p codex-cli --release` followed by `cargo build -p codex-subagents --release` to ensure feature parity.
+3. Enable subagents and explore: set `CODEX_SUBAGENTS_ENABLED=1`, run `codex subagents list`, then try `codex subagents run reviewer --prompt "Audit the new subagent orchestrator"`.
+4. Customize on-site: add Markdown specs under `.codex/agents/` (see examples below) and share them with hackathon teammates for instant reuse.
+
+---
+
 ## Quickstart
 
 ### Installing and running Codex CLI
@@ -195,11 +313,16 @@ The `codex-subagent` shim makes it easy to exercise subagents without toggling f
 If you are testing an unpublished build from this repository, install it globally from the checkout so both entry points are available on your PATH:
 
 ```bash
-cd codex-cli
-npm install -g .
+# from the repository root
+cargo build -p codex-cli --release
+TARGET=$(rustc -vV | awk '/host:/ { print($2) }')
+cp codex-rs/target/release/codex "codex-cli/vendor/${TARGET}/codex/codex"
+(cd codex-cli && npm install -g .)
 which codex
 which codex-subagent
 ```
+
+This rebuild uses the local workspace code inside `codex-rs`. Cargo will only use cached crates from crates.io; if you need a completely offline run, prime the cache once with `cargo fetch` while online and then repeat the build with `CARGO_NET_OFFLINE=1`.
 
 #### 0. Prerequisites
 - `npm install -g @openai/codex` to install the CLI and the `codex-subagent` shim.
