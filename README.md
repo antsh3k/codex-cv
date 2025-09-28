@@ -12,13 +12,13 @@
 npm install -g @stat-guy/codex-subagents
 
 # Initialize configuration
-codex-subagents init
+cv-agents init
 
 # See available agents
-codex-subagents list
+cv-agents list
 
 # Run a code review agent
-codex-subagents run code-reviewer --prompt "Review my staged changes"
+cv-agents run code-reviewer --prompt "Review my staged changes"
 ```
 
 ## ✨ Features
@@ -36,28 +36,28 @@ codex-subagents run code-reviewer --prompt "Review my staged changes"
 Reviews staged Git changes for logic bugs, style issues, and security concerns.
 
 ```bash
-codex-subagents run code-reviewer --prompt "Review these changes for potential issues"
+cv-agents run code-reviewer --prompt "Review these changes for potential issues"
 ```
 
 ### 📝 **doc-writer**
 Generates comprehensive documentation for code projects, APIs, and functions.
 
 ```bash
-codex-subagents run doc-writer --prompt "Create API documentation for the user module"
+cv-agents run doc-writer --prompt "Create API documentation for the user module"
 ```
 
 ### 🧪 **test-generator**
 Creates comprehensive test suites with unit, integration, and edge case testing.
 
 ```bash
-codex-subagents run test-generator --prompt "Generate tests for the authentication service"
+cv-agents run test-generator --prompt "Generate tests for the authentication service"
 ```
 
 ### 🐛 **bug-hunter**
 Analyzes code to identify and propose fixes for bugs and performance issues.
 
 ```bash
-codex-subagents run bug-hunter --prompt "Find bugs in the payment processing code"
+cv-agents run bug-hunter --prompt "Find bugs in the payment processing code"
 ```
 
 ## 🛠️ Installation
@@ -71,14 +71,14 @@ codex-subagents run bug-hunter --prompt "Find bugs in the payment processing cod
 ### Install
 
 ```bash
-npm install -g codex-subagents
+npm install -g @stat-guy/codex-subagents
 ```
 
 ### Configuration
 
 ```bash
 # Initialize configuration
-codex-subagents init
+cv-agents init
 
 # Edit configuration file
 nano ~/.codex-subagents/config.yaml
@@ -100,48 +100,48 @@ echo 'export OPENAI_API_KEY="your-api-key-here"' >> ~/.bashrc
 
 ```bash
 # List all available agents
-codex-subagents list
+cv-agents list
 
 # Run an agent interactively
-codex-subagents run <agent-name>
+cv-agents run <agent-name>
 
 # Run with a specific prompt
-codex-subagents run <agent-name> --prompt "Your prompt here"
+cv-agents run <agent-name> --prompt "Your prompt here"
 
 # Check agent status
-codex-subagents status
+cv-agents status
 
 # Create a new custom agent
-codex-subagents create my-agent --template basic
+cv-agents create my-agent --template basic
 
 # Check installation health
-codex-subagents doctor
+cv-agents doctor
 ```
 
 ### Advanced Usage
 
 ```bash
 # Use with pipes
-echo "Review this function" | codex-subagents run code-reviewer
+echo "Review this function" | cv-agents run code-reviewer
 
 # JSON output for automation
-codex-subagents list --json
+cv-agents list --json
 
 # Verbose logging
-codex-subagents run code-reviewer --verbose --prompt "Review main.js"
+cv-agents run code-reviewer --verbose --prompt "Review main.js"
 
 # Don't wait for completion
-codex-subagents run test-generator --no-wait --prompt "Generate tests"
+cv-agents run test-generator --no-wait --prompt "Generate tests"
 ```
 
 ### Aliases
 
-For convenience, you can use the short alias `cs`:
+For convenience, you can use the short alias `cva`:
 
 ```bash
-cs list
-cs run code-reviewer
-cs create my-agent
+cva list
+cva run code-reviewer
+cva create my-agent
 ```
 
 ## 🎨 Creating Custom Agents
@@ -150,7 +150,7 @@ Create agents tailored to your specific workflow:
 
 ```bash
 # Create a new agent
-codex-subagents create my-reviewer --template code-review
+cv-agents create my-reviewer --template code-review
 
 # Edit the agent definition
 nano ~/.codex-subagents/agents/my-reviewer.md
@@ -225,11 +225,11 @@ security:
 
 ```bash
 # Check installation
-codex-subagents doctor
+cv-agents doctor
 
 # Reinstall if needed
-npm uninstall -g codex-subagents
-npm install -g codex-subagents
+npm uninstall -g @stat-guy/codex-subagents
+npm install -g @stat-guy/codex-subagents
 ```
 
 ### Common Issues
@@ -237,14 +237,14 @@ npm install -g codex-subagents
 **"Binary not found" Error:**
 - Ensure you're on a supported platform (macOS, Linux, Windows)
 - Try reinstalling the package
-- Check the output of `codex-subagents doctor`
+- Check the output of `cv-agents doctor`
 
 **"API key not configured" Error:**
 - Set your OpenAI API key: `export OPENAI_API_KEY="your-key"`
 - Or update the config file: `~/.codex-subagents/config.yaml`
 
 **"Agent not found" Error:**
-- Check available agents: `codex-subagents list`
+- Check available agents: `cv-agents list`
 - Ensure agent file exists: `ls ~/.codex-subagents/agents/`
 
 ### Getting Help
@@ -261,7 +261,7 @@ npm install -g codex-subagents
 git add .
 
 # Get AI-powered code review
-codex-subagents run code-reviewer --prompt "Review my staged changes for bugs and improvements"
+cv-agents run code-reviewer --prompt "Review my staged changes for bugs and improvements"
 
 # Address feedback and commit
 git commit -m "Fix issues identified by code review"
@@ -270,28 +270,28 @@ git commit -m "Fix issues identified by code review"
 ### Documentation Generation
 ```bash
 # Generate project README
-codex-subagents run doc-writer --prompt "Create a comprehensive README for this project"
+cv-agents run doc-writer --prompt "Create a comprehensive README for this project"
 
 # Document specific functions
-codex-subagents run doc-writer --prompt "Document the authentication middleware functions"
+cv-agents run doc-writer --prompt "Document the authentication middleware functions"
 ```
 
 ### Test Creation
 ```bash
 # Generate comprehensive tests
-codex-subagents run test-generator --prompt "Create unit tests for the user service module"
+cv-agents run test-generator --prompt "Create unit tests for the user service module"
 
 # Add integration tests
-codex-subagents run test-generator --prompt "Generate integration tests for the API endpoints"
+cv-agents run test-generator --prompt "Generate integration tests for the API endpoints"
 ```
 
 ### Bug Hunting
 ```bash
 # Analyze problematic code
-codex-subagents run bug-hunter --prompt "Find potential bugs in the payment processing logic"
+cv-agents run bug-hunter --prompt "Find potential bugs in the payment processing logic"
 
 # Performance analysis
-codex-subagents run bug-hunter --prompt "Identify performance bottlenecks in this algorithm"
+cv-agents run bug-hunter --prompt "Identify performance bottlenecks in this algorithm"
 ```
 
 ## 🏗️ Development
@@ -330,9 +330,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 **Ready to supercharge your coding workflow?**
 
 ```bash
-npm install -g codex-subagents
-codex-subagents init
-codex-subagents run code-reviewer
+npm install -g @stat-guy/codex-subagents
+cv-agents init
+cv-agents run code-reviewer
 ```
 
 *Happy coding! 🚀*

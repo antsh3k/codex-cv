@@ -1,11 +1,11 @@
 {
   "name": "@stat-guy/codex-subagents",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "AI subagents for specialized coding tasks - delegate work to focused agents for code review, documentation, testing, and debugging",
   "main": "lib/index.js",
   "bin": {
-    "codex-subagents": "bin/codex-subagents.js",
-    "cs": "bin/codex-subagents.js"
+    "cv-agents": "bin/codex-subagents.js",
+    "cva": "bin/codex-subagents.js"
   },
   "scripts": {
     "build": "node scripts/build.js",
