@@ -181,6 +181,8 @@ These fields are optional to preserve backwards compatibility.
 - CLI subcommands:
   - `codex subagents list` → prints discovered agents with source, model, and tools
   - `codex subagents run <name> [-- prompt...]` → runs a specific subagent non‑interactively
+  - `codex-subagent list` → convenience command (same as `codex subagents list` with auto-enablement)
+  - `codex-subagent run <name> [-- prompt...]` → convenience command (same as `codex subagents run` with auto-enablement)
 
 Notes:
 - `subagents run` streams standard Codex events; it returns immediately with `{ subConversationId }` and progress arrives via notifications.
