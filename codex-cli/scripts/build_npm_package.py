@@ -149,6 +149,11 @@ def stage_sources(staging_dir: Path, version: str) -> None:
     if readme_src.exists():
         shutil.copy2(readme_src, staging_dir / "README.md")
 
+    # Include example subagent definitions
+    examples_src = REPO_ROOT / "examples"
+    if examples_src.exists():
+        shutil.copytree(examples_src, staging_dir / "examples", dirs_exist_ok=True)
+
     with open(CODEX_CLI_ROOT / "package.json", "r", encoding="utf-8") as fh:
         package_json = json.load(fh)
     package_json["version"] = version

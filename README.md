@@ -1,103 +1,338 @@
+# Codex Subagents
 
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install codex</code></p>
+**AI-powered specialist agents for coding tasks** - Delegate work to focused agents for code review, documentation, testing, and debugging.
 
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
-</br>
-</br>If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE</a>
-</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a></p>
+[![npm version](https://badge.fury.io/js/codex-subagents.svg)](https://www.npmjs.com/package/codex-subagents)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-<p align="center">
-  <img src="./.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
-  </p>
+## 🚀 Quick Start
 
----
+```bash
+# Install globally
+npm install -g codex-subagents
 
-## Quickstart
+# Initialize configuration
+codex-subagents init
 
-### Installing and running Codex CLI
+# See available agents
+codex-subagents list
 
-Install globally with your preferred package manager. If you use npm:
-
-```shell
-npm install -g @openai/codex
+# Run a code review agent
+codex-subagents run code-reviewer --prompt "Review my staged changes"
 ```
 
-Alternatively, if you use Homebrew:
+## ✨ Features
 
-```shell
-brew install codex
+- **🤖 Built-in Specialist Agents**: Code review, documentation, testing, and debugging
+- **🎯 Task-Focused**: Each agent specializes in specific coding tasks
+- **🛡️ Tool Security**: Configurable tool allowlists for safe execution
+- **⚙️ Customizable**: Create your own agents with simple markdown files
+- **🔄 Git Integration**: Seamlessly works with your existing Git workflow
+- **🌍 Cross-Platform**: Works on macOS, Linux, and Windows
+
+## 📦 Built-in Agents
+
+### 🔍 **code-reviewer**
+Reviews staged Git changes for logic bugs, style issues, and security concerns.
+
+```bash
+codex-subagents run code-reviewer --prompt "Review these changes for potential issues"
 ```
 
-Then simply run `codex` to get started:
+### 📝 **doc-writer**
+Generates comprehensive documentation for code projects, APIs, and functions.
 
-```shell
-codex
+```bash
+codex-subagents run doc-writer --prompt "Create API documentation for the user module"
 ```
 
-<details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
+### 🧪 **test-generator**
+Creates comprehensive test suites with unit, integration, and edge case testing.
 
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
+```bash
+codex-subagents run test-generator --prompt "Generate tests for the authentication service"
+```
 
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
+### 🐛 **bug-hunter**
+Analyzes code to identify and propose fixes for bugs and performance issues.
 
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
+```bash
+codex-subagents run bug-hunter --prompt "Find bugs in the payment processing code"
+```
 
-</details>
+## 🛠️ Installation
 
-### Using Codex with your ChatGPT plan
+### Prerequisites
 
-<p align="center">
-  <img src="./.github/codex-cli-login.png" alt="Codex CLI login" width="80%" />
-  </p>
+- **Node.js** 16+
+- **Git** (for repository analysis)
+- **OpenAI API Key** (set `OPENAI_API_KEY` environment variable)
 
-Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codex as part of your Plus, Pro, Team, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
+### Install
 
-You can also use Codex with an API key, but this requires [additional setup](./docs/authentication.md#usage-based-billing-alternative-use-an-openai-api-key). If you previously used an API key for usage-based billing, see the [migration steps](./docs/authentication.md#migrating-from-usage-based-billing-api-key). If you're having trouble with login, please comment on [this issue](https://github.com/openai/codex/issues/1243).
-
-### Model Context Protocol (MCP)
-
-Codex CLI supports [MCP servers](./docs/advanced.md#model-context-protocol-mcp). Enable by adding an `mcp_servers` section to your `~/.codex/config.toml`.
-
+```bash
+npm install -g codex-subagents
+```
 
 ### Configuration
 
-Codex CLI supports a rich set of configuration options, with preferences stored in `~/.codex/config.toml`. For full configuration options, see [Configuration](./docs/config.md).
+```bash
+# Initialize configuration
+codex-subagents init
+
+# Edit configuration file
+nano ~/.codex-subagents/config.yaml
+```
+
+### API Key Setup
+
+```bash
+# Set OpenAI API key
+export OPENAI_API_KEY="your-api-key-here"
+
+# Or add to your ~/.bashrc / ~/.zshrc
+echo 'export OPENAI_API_KEY="your-api-key-here"' >> ~/.bashrc
+```
+
+## 📖 Usage
+
+### Basic Commands
+
+```bash
+# List all available agents
+codex-subagents list
+
+# Run an agent interactively
+codex-subagents run <agent-name>
+
+# Run with a specific prompt
+codex-subagents run <agent-name> --prompt "Your prompt here"
+
+# Check agent status
+codex-subagents status
+
+# Create a new custom agent
+codex-subagents create my-agent --template basic
+
+# Check installation health
+codex-subagents doctor
+```
+
+### Advanced Usage
+
+```bash
+# Use with pipes
+echo "Review this function" | codex-subagents run code-reviewer
+
+# JSON output for automation
+codex-subagents list --json
+
+# Verbose logging
+codex-subagents run code-reviewer --verbose --prompt "Review main.js"
+
+# Don't wait for completion
+codex-subagents run test-generator --no-wait --prompt "Generate tests"
+```
+
+### Aliases
+
+For convenience, you can use the short alias `cs`:
+
+```bash
+cs list
+cs run code-reviewer
+cs create my-agent
+```
+
+## 🎨 Creating Custom Agents
+
+Create agents tailored to your specific workflow:
+
+```bash
+# Create a new agent
+codex-subagents create my-reviewer --template code-review
+
+# Edit the agent definition
+nano ~/.codex-subagents/agents/my-reviewer.md
+```
+
+### Agent Definition Format
+
+```markdown
+---
+name: my-custom-agent
+description: Does something specific for my project
+model: gpt-4
+tools:
+  - git
+  - npm
+  - node
+keywords:
+  - custom
+  - specific-task
+---
+
+# My Custom Agent Instructions
+
+I am a specialized agent that helps with...
+
+## What I can do:
+- Specific task 1
+- Specific task 2
+
+## Usage examples:
+- "Help me with X"
+- "Analyze Y and suggest Z"
+```
+
+### Agent Templates
+
+Available templates:
+- `basic` - Simple general-purpose agent
+- `code-review` - Code review specialist
+- `docs` - Documentation generator
+- `testing` - Test suite creator
+
+## ⚙️ Configuration
+
+Configuration is stored in `~/.codex-subagents/config.yaml`:
+
+```yaml
+# AI Configuration
+ai:
+  provider: openai
+  model: gpt-4
+  apiKey: ${OPENAI_API_KEY}
+  temperature: 0.1
+  maxTokens: 4000
+
+# Agent Configuration
+agents:
+  timeout: 300
+  maxRetries: 2
+  defaultTools: [git, node, npm]
+
+# Security
+security:
+  allowedCommands: [git, npm, node, cargo, python3]
+  blockedCommands: [rm, sudo, chmod]
+  requireConfirmation: [git push, git reset --hard]
+```
+
+## 🔧 Troubleshooting
+
+### Installation Issues
+
+```bash
+# Check installation
+codex-subagents doctor
+
+# Reinstall if needed
+npm uninstall -g codex-subagents
+npm install -g codex-subagents
+```
+
+### Common Issues
+
+**"Binary not found" Error:**
+- Ensure you're on a supported platform (macOS, Linux, Windows)
+- Try reinstalling the package
+- Check the output of `codex-subagents doctor`
+
+**"API key not configured" Error:**
+- Set your OpenAI API key: `export OPENAI_API_KEY="your-key"`
+- Or update the config file: `~/.codex-subagents/config.yaml`
+
+**"Agent not found" Error:**
+- Check available agents: `codex-subagents list`
+- Ensure agent file exists: `ls ~/.codex-subagents/agents/`
+
+### Getting Help
+
+- 📖 **Documentation**: Full docs in the [repository](https://github.com/stat-guy/codex-cv)
+- 🐛 **Issues**: Report bugs on [GitHub Issues](https://github.com/stat-guy/codex-cv/issues)
+- 💬 **Discussions**: Ask questions in [GitHub Discussions](https://github.com/stat-guy/codex-cv/discussions)
+
+## 🎯 Use Cases
+
+### Code Review Workflow
+```bash
+# Stage your changes
+git add .
+
+# Get AI-powered code review
+codex-subagents run code-reviewer --prompt "Review my staged changes for bugs and improvements"
+
+# Address feedback and commit
+git commit -m "Fix issues identified by code review"
+```
+
+### Documentation Generation
+```bash
+# Generate project README
+codex-subagents run doc-writer --prompt "Create a comprehensive README for this project"
+
+# Document specific functions
+codex-subagents run doc-writer --prompt "Document the authentication middleware functions"
+```
+
+### Test Creation
+```bash
+# Generate comprehensive tests
+codex-subagents run test-generator --prompt "Create unit tests for the user service module"
+
+# Add integration tests
+codex-subagents run test-generator --prompt "Generate integration tests for the API endpoints"
+```
+
+### Bug Hunting
+```bash
+# Analyze problematic code
+codex-subagents run bug-hunter --prompt "Find potential bugs in the payment processing logic"
+
+# Performance analysis
+codex-subagents run bug-hunter --prompt "Identify performance bottlenecks in this algorithm"
+```
+
+## 🏗️ Development
+
+### Building from Source
+
+```bash
+git clone https://github.com/stat-guy/codex-cv.git
+cd codex-cv
+npm install
+npm run build
+npm test
+```
+
+### Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Make your changes and add tests
+4. Commit your changes: `git commit -m 'Add amazing feature'`
+5. Push to the branch: `git push origin feature/amazing-feature`
+6. Open a pull request
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- Built on the foundation of AI-powered coding assistance
+- Inspired by the need for specialized, focused AI agents
+- Thanks to the open source community for tools and inspiration
 
 ---
 
-### Docs & FAQ
+**Ready to supercharge your coding workflow?**
 
-- [**Getting started**](./docs/getting-started.md)
-  - [CLI usage](./docs/getting-started.md#cli-usage)
-  - [Running with a prompt as input](./docs/getting-started.md#running-with-a-prompt-as-input)
-  - [Example prompts](./docs/getting-started.md#example-prompts)
-  - [Memory with AGENTS.md](./docs/getting-started.md#memory-with-agentsmd)
-  - [Configuration](./docs/config.md)
-- [**Sandbox & approvals**](./docs/sandbox.md)
-- [**Authentication**](./docs/authentication.md)
-  - [Auth methods](./docs/authentication.md#forcing-a-specific-auth-method-advanced)
-  - [Login on a "Headless" machine](./docs/authentication.md#connecting-on-a-headless-machine)
-- [**Advanced**](./docs/advanced.md)
-  - [Non-interactive / CI mode](./docs/advanced.md#non-interactive--ci-mode)
-  - [Tracing / verbose logging](./docs/advanced.md#tracing--verbose-logging)
-  - [Model Context Protocol (MCP)](./docs/advanced.md#model-context-protocol-mcp)
-- [**Zero data retention (ZDR)**](./docs/zdr.md)
-- [**Contributing**](./docs/contributing.md)
-- [**Install & build**](./docs/install.md)
-  - [System Requirements](./docs/install.md#system-requirements)
-  - [DotSlash](./docs/install.md#dotslash)
-  - [Build from source](./docs/install.md#build-from-source)
-- [**FAQ**](./docs/faq.md)
-- [**Open source fund**](./docs/open-source-fund.md)
+```bash
+npm install -g codex-subagents
+codex-subagents init
+codex-subagents run code-reviewer
+```
 
----
-
-## License
-
-This repository is licensed under the [Apache-2.0 License](LICENSE).
+*Happy coding! 🚀*

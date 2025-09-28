@@ -31,6 +31,10 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(test)]
+use std::sync::Mutex;
+#[cfg(test)]
+use std::sync::OnceLock;
 use tempfile::NamedTempFile;
 use toml::Value as TomlValue;
 use toml_edit::Array as TomlArray;
@@ -191,6 +195,9 @@ pub struct Config {
 
     /// Include the `view_image` tool that lets the agent attach a local image path to context.
     pub include_view_image_tool: bool,
+
+    /// Subagent feature flag settings resolved from configuration and environment.
+    pub subagents: SubagentsConfig,
 
     /// The active profile name used to derive this `Config` (if any).
     pub active_profile: Option<String>,
@@ -715,6 +722,9 @@ pub struct ConfigToml {
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
 
+    /// Subagent feature flag section.
+    pub subagents: Option<SubagentsToml>,
+
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
@@ -747,6 +757,13 @@ impl From<ConfigToml> for UserSavedConfig {
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
     pub trust_level: Option<String>,
+}
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct SubagentsToml {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub auto_route: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
@@ -838,6 +855,36 @@ impl ConfigToml {
                 ))
             }
             None => Ok(ConfigProfile::default()),
+        }
+    }
+}
+
+/// Feature flag configuration resolved for subagents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubagentsConfig {
+    pub enabled: bool,
+    pub auto_route: bool,
+}
+
+impl Default for SubagentsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            auto_route: false,
+        }
+    }
+}
+
+impl SubagentsConfig {
+    pub fn from_sources(toml: Option<&SubagentsToml>) -> Self {
+        let mut enabled = toml.and_then(|s| s.enabled).unwrap_or(false);
+        if let Some(flag) = env_bool("CODEX_SUBAGENTS_ENABLED") {
+            enabled = flag;
+        }
+        let auto_route = toml.and_then(|s| s.auto_route).unwrap_or(false);
+        Self {
+            enabled,
+            auto_route,
         }
     }
 }
@@ -960,6 +1007,8 @@ impl Config {
             .or(cfg.tools.as_ref().and_then(|t| t.view_image))
             .unwrap_or(true);
 
+        let subagents_config = SubagentsConfig::from_sources(cfg.subagents.as_ref());
+
         let model = model
             .or(config_profile.model)
             .or(cfg.model)
@@ -1061,6 +1110,7 @@ impl Config {
                 .unwrap_or(false),
             use_experimental_use_rmcp_client: cfg.experimental_use_rmcp_client.unwrap_or(false),
             include_view_image_tool,
+            subagents: subagents_config,
             active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
             tui_notifications: cfg
@@ -1176,6 +1226,37 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
 }
 
 #[cfg(test)]
+static SUBAGENT_ENV_OVERRIDE: OnceLock<Mutex<Option<Option<bool>>>> = OnceLock::new();
+
+fn env_bool(key: &str) -> Option<bool> {
+    #[cfg(test)]
+    {
+        if key == "CODEX_SUBAGENTS_ENABLED" {
+            if let Some(override_value) = SUBAGENT_ENV_OVERRIDE
+                .get_or_init(|| Mutex::new(None))
+                .lock()
+                .expect("subagent env override mutex poisoned")
+                .clone()
+            {
+                return override_value;
+            }
+        }
+    }
+
+    std::env::var(key)
+        .ok()
+        .and_then(|value| parse_env_flag(&value))
+}
+
+fn parse_env_flag(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use crate::config_types::HistoryPersistence;
     use crate::config_types::Notifications;
@@ -1185,6 +1266,31 @@ mod tests {
 
     use std::time::Duration;
     use tempfile::TempDir;
+
+    fn set_subagent_env_override(value: Option<Option<bool>>) {
+        let lock = super::SUBAGENT_ENV_OVERRIDE.get_or_init(|| Mutex::new(None));
+        *lock.lock().expect("subagent env override mutex poisoned") = value;
+    }
+
+    #[test]
+    fn subagents_config_resolves_with_env_override() {
+        set_subagent_env_override(Some(None));
+        let cfg = r#"
+[subagents]
+enabled = true
+auto_route = false
+"#;
+        let parsed = toml::from_str::<ConfigToml>(cfg).expect("valid subagents config");
+        let base = SubagentsConfig::from_sources(parsed.subagents.as_ref());
+        assert!(base.enabled);
+        assert!(!base.auto_route);
+
+        set_subagent_env_override(Some(Some(false)));
+        let overridden = SubagentsConfig::from_sources(parsed.subagents.as_ref());
+        assert!(!overridden.enabled);
+        assert!(!overridden.auto_route);
+        set_subagent_env_override(None);
+    }
 
     #[test]
     fn test_toml_parsing() {
@@ -1806,6 +1912,7 @@ model_verbosity = "high"
                 use_experimental_unified_exec_tool: false,
                 use_experimental_use_rmcp_client: false,
                 include_view_image_tool: true,
+                subagents: SubagentsConfig::default(),
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
@@ -1865,6 +1972,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
+            subagents: SubagentsConfig::default(),
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
@@ -1939,6 +2047,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
+            subagents: SubagentsConfig::default(),
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
@@ -1999,6 +2108,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
+            subagents: SubagentsConfig::default(),
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),

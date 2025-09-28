@@ -33,9 +33,16 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
+use codex_core::protocol::SubAgentCompletedEvent;
+use codex_core::protocol::SubAgentMessageEvent;
+use codex_core::protocol::SubAgentStartedEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
+use codex_core::subagents::SubagentRunRequest;
+use codex_core::subagent_conflict_tracker::SubagentConflictTracker;
+use codex_core::subagent_conflict_tracker::ConflictDetectionResult;
+use codex_core::subagent_telemetry::SubagentTelemetryTracker;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::UserMessageEvent;
@@ -52,6 +59,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::text::Line;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::UnboundedSender;
@@ -77,14 +85,17 @@ use crate::exec_cell::new_active_exec_command;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
+use crate::history_cell::CompositeHistoryCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PatchEventType;
+use crate::history_cell::PlainHistoryCell;
 use crate::markdown::append_markdown;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+use codex_core::subagents::CoreSubagentRegistry;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -118,6 +129,13 @@ const MAX_TRACKED_GHOST_COMMITS: usize = 20;
 struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
+}
+
+#[derive(Debug, Clone)]
+struct SubagentRunStatus {
+    agent_name: String,
+    last_event: String,
+    completed: bool,
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
@@ -256,6 +274,11 @@ pub(crate) struct ChatWidget {
     ghost_snapshots_disabled: bool,
     // Whether to add a final message separator after the last message
     needs_final_message_separator: bool,
+    subagent_runs: HashMap<String, SubagentRunStatus>,
+    // Tracks subagent patch conflicts and file attributions
+    conflict_tracker: SubagentConflictTracker,
+    // Tracks subagent performance metrics and telemetry
+    telemetry_tracker: SubagentTelemetryTracker,
 }
 
 struct UserMessage {
@@ -524,6 +547,56 @@ impl ChatWidget {
     }
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
+        // Check for conflicts before applying the patch
+        let conflict_result = self.conflict_tracker.check_conflicts(&event);
+
+        // Display conflict warnings or blocking messages
+        match &conflict_result {
+            ConflictDetectionResult::Warning { message, conflicting_files } => {
+                let warning_line = Line::from(vec![
+                    "⚠ ".yellow().into(),
+                    "Patch Conflict Warning: ".yellow().into(),
+                    message.clone().into(),
+                ]);
+                self.add_to_history(PlainHistoryCell::new(vec![warning_line]));
+
+                for conflict in conflicting_files {
+                    let detail_line = Line::from(vec![
+                        "  ".into(),
+                        conflict.file_path.display().to_string().dim().into(),
+                        " (last modified by ".dim().into(),
+                        conflict.previous_agent.clone().cyan().into(),
+                        ")".dim().into(),
+                    ]);
+                    self.add_to_history(PlainHistoryCell::new(vec![detail_line]));
+                }
+            },
+            ConflictDetectionResult::Blocked { message, blocking_agent: _, conflicting_files } => {
+                let error_line = Line::from(vec![
+                    "🚫 ".red().into(),
+                    "Patch Blocked: ".red().bold().into(),
+                    message.clone().into(),
+                ]);
+                self.add_to_history(PlainHistoryCell::new(vec![error_line]));
+
+                let detail_line = Line::from(vec![
+                    "  Conflicting files: ".dim().into(),
+                    format!("{}", conflicting_files.iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")).dim().into(),
+                ]);
+                self.add_to_history(PlainHistoryCell::new(vec![detail_line]));
+                return; // Don't proceed with patch application
+            },
+            ConflictDetectionResult::Clear => {
+                // No conflicts, proceed normally
+            }
+        }
+
+        // Record the patch beginning for conflict tracking
+        self.conflict_tracker.record_patch_begin(&event);
+
         self.add_to_history(history_cell::new_patch_event(
             PatchEventType::ApplyBegin {
                 auto_approved: event.auto_approved,
@@ -715,6 +788,9 @@ impl ChatWidget {
         &mut self,
         event: codex_core::protocol::PatchApplyEndEvent,
     ) {
+        // Record patch completion for conflict tracking and attribution
+        self.conflict_tracker.record_patch_end(&event);
+
         // If the patch was successful, just let the "Edited" block stand.
         // Otherwise, add a failure block.
         if !event.success {
@@ -913,6 +989,9 @@ impl ChatWidget {
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
+            subagent_runs: HashMap::new(),
+            conflict_tracker: SubagentConflictTracker::new(),
+            telemetry_tracker: SubagentTelemetryTracker::new(),
         }
     }
 
@@ -975,6 +1054,9 @@ impl ChatWidget {
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
+            subagent_runs: HashMap::new(),
+            conflict_tracker: SubagentConflictTracker::new(),
+            telemetry_tracker: SubagentTelemetryTracker::new(),
         }
     }
 
@@ -1097,6 +1179,15 @@ impl ChatWidget {
             }
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
+            }
+            SlashCommand::Agents => {
+                self.list_subagents();
+            }
+            SlashCommand::Use => {
+                self.handle_use_command();
+            }
+            SlashCommand::SubagentStatus => {
+                self.show_subagent_status();
             }
             SlashCommand::Quit => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
@@ -1420,7 +1511,97 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
+            EventMsg::SubAgentStarted(event) => self.on_subagent_started(event),
+            EventMsg::SubAgentMessage(event) => self.on_subagent_message(event),
+            EventMsg::SubAgentCompleted(event) => self.on_subagent_completed(event),
         }
+    }
+
+    fn list_subagents(&mut self) {
+        let config = self.config.clone();
+        let tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let registry = Arc::new(CoreSubagentRegistry::from_config(&config));
+            let report = registry.reload().await;
+            let agents = registry.list().await;
+            let mut lines: Vec<Line<'static>> = Vec::new();
+            if agents.is_empty() {
+                lines.push(Line::from("No subagents found"));
+            } else {
+                lines.push(Line::from("Available subagents:"));
+                for record in agents {
+                    let spec = record.spec.as_ref();
+                    let mut detail = format!("- {}", spec.name());
+                    if let Some(desc) = spec.description() {
+                        detail.push_str(&format!(": {}", desc));
+                    }
+                    if let Some(model) = spec.model() {
+                        detail.push_str(&format!(" (model: {model})"));
+                    }
+                    lines.push(detail.into());
+                }
+            }
+            if !report.errors.is_empty() {
+                lines.push(Line::from("Errors:"));
+                for err in report.errors {
+                    lines.push(format!("  {} — {}", err.path.display(), err.message).into());
+                }
+            }
+            tx.send(AppEvent::InsertHistoryCell(Box::new(
+                PlainHistoryCell::new(lines),
+            )));
+        });
+    }
+
+    fn handle_use_command(&mut self) {
+        let full_text = self.bottom_pane.current_text();
+        let trimmed = full_text.trim();
+        let Some(rest) = trimmed.strip_prefix("/use") else {
+            return;
+        };
+        let rest = rest.trim();
+        if rest.is_empty() {
+            self.add_to_history(history_cell::new_error_event("Usage: /use <agent> [prompt]".to_string()));
+            self.request_redraw();
+            return;
+        }
+        let mut parts = rest.splitn(2, char::is_whitespace);
+        let agent_name = parts.next().unwrap_or_default().to_string();
+        let prompt = parts.next().map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+        if agent_name.is_empty() {
+            self.add_to_history(history_cell::new_error_event("Usage: /use <agent> [prompt]".to_string()));
+            self.request_redraw();
+            return;
+        }
+        let request = SubagentRunRequest {
+            agent_name: agent_name.clone(),
+            prompt,
+        };
+        self.bottom_pane.set_text_content(String::new());
+        self.add_to_history(PlainHistoryCell::new(vec![Line::from(format!("Requesting subagent {agent_name}..."))]));
+        self.app_event_tx.send(AppEvent::RunSubagent(request));
+    }
+
+    fn show_subagent_status(&mut self) {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        if self.subagent_runs.is_empty() {
+            lines.push(Line::from("No subagent runs yet."));
+        } else {
+            lines.push(Line::from("Subagent status:"));
+            let mut runs: Vec<_> = self.subagent_runs.values().collect();
+            runs.sort_by(|a, b| a.agent_name.cmp(&b.agent_name));
+            for status in runs {
+                let state = if status.completed {
+                    "completed"
+                } else {
+                    "running"
+                };
+                let summary = format!("- {} [{}]: {}", status.agent_name, state, status.last_event);
+                lines.push(summary.into());
+            }
+        }
+        self.add_to_history(PlainHistoryCell::new(lines));
+        self.request_redraw();
     }
 
     fn on_entered_review_mode(&mut self, review: ReviewRequest) {
@@ -1428,6 +1609,105 @@ impl ChatWidget {
         self.is_review_mode = true;
         let banner = format!(">> Code review started: {} <<", review.user_facing_hint);
         self.add_to_history(history_cell::new_review_status_line(banner));
+        self.request_redraw();
+    }
+
+    fn on_subagent_started(&mut self, event: SubAgentStartedEvent) {
+        let mut message = format!("subagent {} started", event.agent_name);
+        if let Some(model) = event.model.clone() {
+            message.push_str(&format!(" (model: {model})"));
+        }
+
+        // Record telemetry start
+        self.telemetry_tracker.record_subagent_started(&event);
+
+        // Enhanced styling: cyan for subagent identifier with dim context
+        let styled_line = Line::from(vec![
+            "▶ ".cyan().into(),
+            event.agent_name.clone().cyan().bold().into(),
+            " started".dim().into(),
+            if let Some(model) = event.model.clone() {
+                format!(" (model: {model})").dim().into()
+            } else {
+                "".into()
+            }
+        ]);
+
+        self.add_to_history(PlainHistoryCell::new(vec![styled_line]));
+        self.subagent_runs.insert(
+            event.sub_conversation_id.clone(),
+            SubagentRunStatus {
+                agent_name: event.agent_name,
+                last_event: message,
+                completed: false,
+            },
+        );
+        self.request_redraw();
+    }
+
+    fn on_subagent_message(&mut self, event: SubAgentMessageEvent) {
+        let message = format!("{}: {}", event.agent_name, event.content);
+
+        // Enhanced styling: nested conversation with indentation and cyan agent name
+        let styled_line = Line::from(vec![
+            "  ".into(),  // Indentation for nested conversation
+            event.agent_name.clone().cyan().into(),
+            ": ".dim().into(),
+            event.content.clone().into(),
+        ]);
+
+        self.add_to_history(PlainHistoryCell::new(vec![styled_line]));
+        self.subagent_runs
+            .entry(event.sub_conversation_id.clone())
+            .and_modify(|status| {
+                status.last_event = message.clone();
+            })
+            .or_insert(SubagentRunStatus {
+                agent_name: event.agent_name,
+                last_event: message.clone(),
+                completed: false,
+            });
+        self.request_redraw();
+    }
+
+    fn on_subagent_completed(&mut self, event: SubAgentCompletedEvent) {
+        let mut message = format!("subagent {} completed", event.agent_name);
+        let outcome_summary = event
+            .outcome
+            .clone()
+            .unwrap_or_else(|| "completed".to_string());
+        if !outcome_summary.is_empty() {
+            message.push_str(&format!(" — {outcome_summary}"));
+        }
+
+        // Record telemetry completion with current token usage
+        let current_token_usage = self.token_info.as_ref().map(|ti| ti.total_token_usage.clone());
+        self.telemetry_tracker.record_subagent_completed(&event, current_token_usage);
+
+        // Enhanced styling: completion with visual closure indicator
+        let styled_line = Line::from(vec![
+            "◀ ".cyan().into(),
+            event.agent_name.clone().cyan().bold().into(),
+            " completed".dim().into(),
+            if !outcome_summary.is_empty() {
+                format!(" — {outcome_summary}").dim().into()
+            } else {
+                "".into()
+            }
+        ]);
+
+        self.add_to_history(PlainHistoryCell::new(vec![styled_line]));
+        self.subagent_runs
+            .entry(event.sub_conversation_id.clone())
+            .and_modify(|status| {
+                status.last_event = outcome_summary.clone();
+                status.completed = true;
+            })
+            .or_insert(SubagentRunStatus {
+                agent_name: event.agent_name,
+                last_event: outcome_summary,
+                completed: true,
+            });
         self.request_redraw();
     }
 
@@ -1556,12 +1836,87 @@ impl ChatWidget {
             default_usage = TokenUsage::default();
             &default_usage
         };
-        self.add_to_history(crate::status::new_status_output(
+
+        // Create base status output
+        let base_status = crate::status::new_status_output(
             &self.config,
             usage_ref,
             &self.conversation_id,
             self.rate_limit_snapshot.as_ref(),
-        ));
+        );
+
+        // Add subagent counters and telemetry if any subagents have run
+        if !self.subagent_runs.is_empty() {
+            let running_count = self.subagent_runs.values().filter(|s| !s.completed).count();
+            let completed_count = self.subagent_runs.values().filter(|s| s.completed).count();
+            let total_count = self.subagent_runs.len();
+
+            let mut status_lines = vec![];
+
+            // Basic counters line
+            let subagent_line = Line::from(vec![
+                "Subagents: ".dim().into(),
+                format!("{total_count} total").into(),
+                if running_count > 0 {
+                    format!(", {running_count} running").cyan().into()
+                } else {
+                    "".into()
+                },
+                if completed_count > 0 {
+                    format!(", {completed_count} completed").dim().into()
+                } else {
+                    "".into()
+                },
+            ]);
+            status_lines.push(subagent_line);
+
+            // Add telemetry summary if we have completed executions
+            let telemetry_summary = self.telemetry_tracker.get_summary();
+            if telemetry_summary.total_executions > 0 {
+                let avg_duration_secs = telemetry_summary.average_duration.as_secs_f64();
+                let success_rate = (telemetry_summary.successful_executions as f64 / telemetry_summary.total_executions as f64) * 100.0;
+
+                let telemetry_line = Line::from(vec![
+                    "Performance: ".dim().into(),
+                    format!("{:.1}s avg", avg_duration_secs).into(),
+                    format!(", {:.1}% success", success_rate).into(),
+                    if telemetry_summary.total_tokens > 0 {
+                        format!(", {} tokens avg", telemetry_summary.average_tokens_per_execution).dim().into()
+                    } else {
+                        "".into()
+                    }
+                ]);
+                status_lines.push(telemetry_line);
+
+                // Show top performing agents if we have multiple
+                if telemetry_summary.agent_performance.len() > 1 {
+                    let mut agents: Vec<_> = telemetry_summary.agent_performance.iter().collect();
+                    agents.sort_by(|a, b| b.1.executions.cmp(&a.1.executions));
+
+                    if let Some((top_agent, metrics)) = agents.first() {
+                        let top_agent_line = Line::from(vec![
+                            "Top agent: ".dim().into(),
+                            top_agent.clone().cyan().into(),
+                            format!(" ({} runs, {:.1}% success)",
+                                metrics.executions,
+                                metrics.success_rate * 100.0).dim().into(),
+                        ]);
+                        status_lines.push(top_agent_line);
+                    }
+                }
+            }
+
+            let subagent_status = PlainHistoryCell::new(status_lines);
+
+            // Combine base status with subagent info
+            let combined = CompositeHistoryCell::new(vec![
+                Box::new(base_status),
+                Box::new(subagent_status),
+            ]);
+            self.add_to_history(combined);
+        } else {
+            self.add_to_history(base_status);
+        }
     }
 
     /// Open a popup to choose the model preset (model + reasoning effort).

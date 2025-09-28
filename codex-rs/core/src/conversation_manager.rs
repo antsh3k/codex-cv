@@ -13,9 +13,18 @@ use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
+use crate::subagents::CoreSubagentRegistry;
+use crate::subagents::SubagentIntegrationError;
+use crate::subagents::SubagentOrchestrator;
+use crate::subagents::SubagentRunRequest;
+use crate::subagents::SubagentExecConfig;
+use crate::subagents::SubagentExecResult;
+use codex_subagents::SubagentSpec;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::InputItem;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -109,6 +118,113 @@ impl ConversationManager {
             .get(&conversation_id)
             .cloned()
             .ok_or_else(|| CodexErr::ConversationNotFound(conversation_id))
+    }
+
+    /// Spawn and execute a subagent conversation with full orchestration.
+    pub async fn spawn_subagent_conversation(
+        &self,
+        mut config: Config,
+        request: SubagentRunRequest,
+    ) -> CodexResult<(NewConversation, Arc<SubagentSpec>, Vec<EventMsg>)> {
+        if !SubagentOrchestrator::is_enabled(&config) {
+            return Err(CodexErr::SubagentsDisabled);
+        }
+
+        let registry = Arc::new(CoreSubagentRegistry::from_config(&config));
+        let orchestrator = SubagentOrchestrator::new(registry.clone());
+
+        let spec = orchestrator
+            .prepare(&config, &request)
+            .await
+            .map_err(|err| match err {
+                SubagentIntegrationError::Disabled => CodexErr::SubagentsDisabled,
+                SubagentIntegrationError::UnknownAgent(name) => CodexErr::UnknownSubagent(name),
+                SubagentIntegrationError::Registry(e) => {
+                    CodexErr::UnsupportedOperation(format!("subagent registry error: {e}"))
+                }
+            })?;
+
+        // Apply model override if specified by the agent
+        if let Some(model) = spec.model() {
+            config.model = model.to_string();
+        }
+
+        // Create the isolated conversation
+        let new_conversation = self
+            .spawn_conversation(config, self.auth_manager.clone())
+            .await?;
+
+        // Execute the subagent with the orchestrator
+        let exec_config = SubagentExecConfig::default();
+        let exec_result = orchestrator
+            .execute(
+                new_conversation.conversation.clone(),
+                spec.clone(),
+                &request,
+                &exec_config,
+            )
+            .await
+            .map_err(|err| match err {
+                SubagentIntegrationError::Disabled => CodexErr::SubagentsDisabled,
+                SubagentIntegrationError::UnknownAgent(name) => CodexErr::UnknownSubagent(name),
+                SubagentIntegrationError::Registry(e) => {
+                    CodexErr::UnsupportedOperation(format!("subagent execution error: {e}"))
+                }
+            })?;
+
+        Ok((new_conversation, spec, exec_result.events))
+    }
+
+    /// Legacy spawn method for backwards compatibility during transition.
+    pub async fn spawn_subagent_conversation_legacy(
+        &self,
+        mut config: Config,
+        request: SubagentRunRequest,
+    ) -> CodexResult<(NewConversation, Arc<SubagentSpec>, Vec<EventMsg>)> {
+        if !SubagentOrchestrator::is_enabled(&config) {
+            return Err(CodexErr::SubagentsDisabled);
+        }
+
+        let registry = Arc::new(CoreSubagentRegistry::from_config(&config));
+        let orchestrator = SubagentOrchestrator::new(registry.clone());
+
+        let spec = orchestrator
+            .prepare(&config, &request)
+            .await
+            .map_err(|err| match err {
+                SubagentIntegrationError::Disabled => CodexErr::SubagentsDisabled,
+                SubagentIntegrationError::UnknownAgent(name) => CodexErr::UnknownSubagent(name),
+                SubagentIntegrationError::Registry(e) => {
+                    CodexErr::UnsupportedOperation(format!("subagent registry error: {e}"))
+                }
+            })?;
+
+        if let Some(model) = spec.model() {
+            config.model = model.to_string();
+        }
+
+        let new_conversation = self
+            .spawn_conversation(config, self.auth_manager.clone())
+            .await?;
+
+        if let Some(prompt) = request
+            .prompt
+            .as_ref()
+            .map(|p| p.trim())
+            .filter(|p| !p.is_empty())
+        {
+            let submission = Op::UserInput {
+                items: vec![InputItem::Text {
+                    text: prompt.to_string(),
+                }],
+            };
+            let _ = new_conversation.conversation.submit(submission).await?;
+        }
+
+        let sub_conversation_id = new_conversation.conversation_id.to_string();
+        let events = orchestrator.lifecycle_events(spec.clone(), &request, &sub_conversation_id);
+
+        Ok((new_conversation, spec, events))
     }
 
     pub async fn resume_conversation_from_rollout(

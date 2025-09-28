@@ -24,9 +24,11 @@ use supports_color::Stream;
 
 mod mcp_cmd;
 mod pre_main_hardening;
+mod subagents_cmd;
 
 use crate::mcp_cmd::McpCli;
 use crate::proto::ProtoCli;
+use crate::subagents_cmd::SubagentsCli;
 
 /// Codex CLI
 ///
@@ -92,6 +94,9 @@ enum Subcommand {
     /// Internal: run the responses API proxy.
     #[clap(hide = true)]
     ResponsesApiProxy(ResponsesApiProxyArgs),
+
+    /// Manage subagents.
+    Subagents(SubagentsCli),
 }
 
 #[derive(Debug, Parser)]
@@ -351,6 +356,13 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             tokio::task::spawn_blocking(move || codex_responses_api_proxy::run_main(args))
                 .await
                 .context("responses-api-proxy blocking task panicked")??;
+        }
+        Some(Subcommand::Subagents(mut subagents_cli)) => {
+            prepend_config_flags(
+                &mut subagents_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            subagents_cmd::run_cli(subagents_cli).await?;
         }
     }
 

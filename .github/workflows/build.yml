@@ -1,0 +1,155 @@
+name: Build Cross-Platform Binaries
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [ published ]
+
+jobs:
+  build:
+    name: Build for ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # macOS
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            platform: darwin
+            arch: x64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            platform: darwin
+            arch: arm64
+
+          # Linux
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            platform: linux
+            arch: x64
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            platform: linux
+            arch: arm64
+
+          # Windows
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            platform: win32
+            arch: x64
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            platform: win32
+            arch: arm64
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        target: ${{ matrix.target }}
+        override: true
+        profile: minimal
+
+    - name: Install Linux dependencies
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
+
+    - name: Cache Rust dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          rust-cli/target
+        key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('rust-cli/Cargo.lock') }}
+
+    - name: Build binary
+      uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --release --target ${{ matrix.target }} --manifest-path rust-cli/Cargo.toml
+
+    - name: Create vendor directory
+      run: |
+        mkdir -p vendor/${{ matrix.target }}
+
+    - name: Copy binary (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        cp rust-cli/target/${{ matrix.target }}/release/codex-subagents vendor/${{ matrix.target }}/
+        chmod +x vendor/${{ matrix.target }}/codex-subagents
+
+    - name: Copy binary (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        cp rust-cli/target/${{ matrix.target }}/release/codex-subagents.exe vendor/${{ matrix.target }}/
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: codex-subagents-${{ matrix.target }}
+        path: vendor/${{ matrix.target }}/
+
+  package:
+    name: Create distributable package
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        registry-url: 'https://registry.npmjs.org'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: artifacts
+
+    - name: Organize binaries
+      run: |
+        mkdir -p vendor
+        for target_dir in artifacts/codex-subagents-*; do
+          target=$(basename "$target_dir" | sed 's/codex-subagents-//')
+          cp -r "$target_dir" "vendor/$target"
+        done
+
+    - name: Create build manifest
+      run: |
+        cat > vendor/build-manifest.json << EOF
+        {
+          "buildTime": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "version": "$(node -p "require('./package.json').version")",
+          "binaryName": "codex-subagents",
+          "targets": [
+            {"target": "x86_64-apple-darwin", "platform": "darwin", "arch": "x64"},
+            {"target": "aarch64-apple-darwin", "platform": "darwin", "arch": "arm64"},
+            {"target": "x86_64-unknown-linux-musl", "platform": "linux", "arch": "x64"},
+            {"target": "aarch64-unknown-linux-musl", "platform": "linux", "arch": "arm64"},
+            {"target": "x86_64-pc-windows-msvc", "platform": "win32", "arch": "x64"},
+            {"target": "aarch64-pc-windows-msvc", "platform": "win32", "arch": "arm64"}
+          ]
+        }
+        EOF
+
+    - name: Publish to npm
+      run: npm publish
+      env:
+        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -2,3 +2,4 @@
 mod status_indicator;
 mod vt100_history;
 mod vt100_live_commit;
+mod subagent_ui_snapshot;

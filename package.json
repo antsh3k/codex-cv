@@ -1,25 +1,76 @@
 {
-  "name": "codex-monorepo",
-  "private": true,
-  "description": "Tools for repo-wide maintenance.",
+  "name": "codex-subagents",
+  "version": "1.0.0",
+  "description": "AI subagents for specialized coding tasks - delegate work to focused agents for code review, documentation, testing, and debugging",
+  "main": "lib/index.js",
+  "bin": {
+    "codex-subagents": "bin/codex-subagents.js",
+    "cs": "bin/codex-subagents.js"
+  },
   "scripts": {
-    "format": "prettier --check *.json *.md .github/workflows/*.yml **/*.js",
-    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml **/*.js"
+    "build": "node scripts/build.js",
+    "build:dev": "cd rust-cli && cargo build --release",
+    "build:cross-platform": "node scripts/build.js",
+    "test": "npm run test:rust && npm run test:js",
+    "test:rust": "cd rust-cli && cargo test",
+    "test:js": "node test/test-runner.js",
+    "prepare": "npm run build",
+    "postinstall": "node scripts/postinstall.js"
   },
-  "devDependencies": {
-    "prettier": "^3.5.3"
+  "keywords": [
+    "ai",
+    "coding",
+    "agents",
+    "subagents",
+    "code-review",
+    "documentation",
+    "testing",
+    "debugging",
+    "git",
+    "cli",
+    "productivity"
+  ],
+  "author": "stat-guy",
+  "license": "MIT",
+  "homepage": "https://github.com/stat-guy/codex-cv",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stat-guy/codex-cv.git"
   },
-  "resolutions": {
-    "braces": "^3.0.3",
-    "micromatch": "^4.0.8",
-    "semver": "^7.7.1"
-  },
-  "overrides": {
-    "punycode": "^2.3.1"
+  "bugs": {
+    "url": "https://github.com/stat-guy/codex-cv/issues"
   },
   "engines": {
-    "node": ">=22",
-    "pnpm": ">=9.0.0"
+    "node": ">=16.0.0"
   },
-  "packageManager": "pnpm@10.8.1"
+  "files": [
+    "bin/",
+    "lib/",
+    "agents/",
+    "docs/",
+    "vendor/",
+    "scripts/postinstall.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "commander": "^11.1.0",
+    "chalk": "^4.1.2",
+    "inquirer": "^8.2.6",
+    "fs-extra": "^11.2.0",
+    "yaml": "^2.3.4",
+    "which": "^4.0.0"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
 }
