@@ -21,6 +21,7 @@ codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
 codex-login = { workspace = true }
 codex-protocol = { workspace = true }
+codex-subagents = { workspace = true }
 mcp-types = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

@@ -1,0 +1,15 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: sanitized
+---
+Subagents (1)
+  • writer
+      source: project
+      Project writer
+      model: gpt-5-codex
+      tools: (none)
+      keywords: test
+
+Parse errors
+  • <project>/.codex/agents/broken.md
+      no YAML frontmatter block found

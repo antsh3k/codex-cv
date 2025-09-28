@@ -458,6 +458,11 @@ pub enum EventMsg {
     /// Signaled when the model begins a new reasoning summary section (e.g., a new titled block).
     AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent),
 
+    /// Lifecycle events emitted for subagent runs.
+    SubAgentStarted(SubAgentStartedEvent),
+    SubAgentMessage(SubAgentMessageEvent),
+    SubAgentCompleted(SubAgentCompletedEvent),
+
     /// Ack the client's configure message.
     SessionConfigured(SessionConfiguredEvent),
 
@@ -524,6 +529,41 @@ pub enum EventMsg {
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct ExitedReviewModeEvent {
     pub review_output: Option<ReviewOutputEvent>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct SubAgentStartedEvent {
+    pub agent_name: String,
+    pub parent_submit_id: String,
+    pub sub_conversation_id: ConversationId,
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct SubAgentMessageEvent {
+    pub agent_name: String,
+    pub sub_conversation_id: ConversationId,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum SubAgentOutcome {
+    Success,
+    Error,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct SubAgentCompletedEvent {
+    pub agent_name: String,
+    pub sub_conversation_id: ConversationId,
+    pub outcome: SubAgentOutcome,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -1105,6 +1145,13 @@ pub struct ExecApprovalRequestEvent {
     /// Optional human-readable reason for the approval (e.g. retry without sandbox).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Optional subagent metadata when the approval originates from a delegated run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_agent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_conversation_id: Option<ConversationId>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
@@ -1115,6 +1162,13 @@ pub struct ApplyPatchApprovalRequestEvent {
     /// Optional explanatory reason (e.g. request for extra write access).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Optional subagent metadata when the approval originates from a delegated run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_agent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_conversation_id: Option<ConversationId>,
     /// When set, the agent is asking the user to allow writes under this root for the remainder of the session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grant_root: Option<PathBuf>,
@@ -1138,6 +1192,11 @@ pub struct PatchApplyBeginEvent {
     pub auto_approved: bool,
     /// The changes to be applied.
     pub changes: HashMap<PathBuf, FileChange>,
+    /// Optional subagent metadata when the patch originates from a delegated run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_agent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_conversation_id: Option<ConversationId>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
@@ -1150,6 +1209,11 @@ pub struct PatchApplyEndEvent {
     pub stderr: String,
     /// Whether the patch was applied successfully.
     pub success: bool,
+    /// Optional subagent metadata when the patch originates from a delegated run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_agent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_conversation_id: Option<ConversationId>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]

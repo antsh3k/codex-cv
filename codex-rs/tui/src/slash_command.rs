@@ -15,6 +15,8 @@ pub enum SlashCommand {
     Model,
     Approvals,
     Review,
+    Agents,
+    Use,
     New,
     Init,
     Compact,
@@ -22,6 +24,7 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    SubagentStatus,
     Mcp,
     Logout,
     Quit,
@@ -37,11 +40,14 @@ impl SlashCommand {
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
+            SlashCommand::Agents => "list available subagents and their metadata",
+            SlashCommand::Use => "run a specific subagent by name",
             SlashCommand::Undo => "restore the workspace to the last Codex snapshot",
             SlashCommand::Quit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::SubagentStatus => "show current subagent activity",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Mcp => "list configured MCP tools",
@@ -67,8 +73,11 @@ impl SlashCommand {
             | SlashCommand::Model
             | SlashCommand::Approvals
             | SlashCommand::Review
+            | SlashCommand::Use
             | SlashCommand::Logout => false,
-            SlashCommand::Diff
+            SlashCommand::Agents
+            | SlashCommand::SubagentStatus
+            | SlashCommand::Diff
             | SlashCommand::Mention
             | SlashCommand::Status
             | SlashCommand::Mcp

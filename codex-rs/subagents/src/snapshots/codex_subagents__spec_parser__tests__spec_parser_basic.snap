@@ -1,0 +1,43 @@
+---
+source: subagents/src/spec_parser.rs
+expression: snapshot
+---
+{
+  "spec": {
+    "title": "Feature Rollout",
+    "overview": "The product team needs an authenticated export feature.",
+    "requirements": [
+      {
+        "id": "REQ-001",
+        "summary": "Add export command",
+        "acceptance_criteria": [
+          {
+            "id": "AC-001",
+            "text": "CLI exposes `codex export`"
+          },
+          {
+            "id": "AC-002",
+            "text": "command requires auth token"
+          }
+        ],
+        "file_hints": [
+          "cli/src/commands/export.rs",
+          "core/src/export.rs"
+        ]
+      },
+      {
+        "id": "REQ-002",
+        "summary": "Log export telemetry",
+        "acceptance_criteria": [
+          {
+            "id": "AC-003",
+            "text": "record success and failure events"
+          }
+        ],
+        "file_hints": [
+          "core/src/telemetry.rs"
+        ]
+      }
+    ]
+  }
+}

@@ -22,6 +22,13 @@ struct BaselineFileInfo {
     oid: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SequentialEditWarning {
+    pub path: PathBuf,
+    pub previous_agent: Option<String>,
+    pub current_agent: Option<String>,
+}
+
 /// Tracks sets of changes to files and exposes the overall unified diff.
 /// Internally, the way this works is now:
 /// 1. Maintain an in-memory baseline snapshot of files when they are first seen.
@@ -38,6 +45,8 @@ pub struct TurnDiffTracker {
     /// Internal filename -> external path as of current accumulated state (after applying all changes).
     /// This is where renames are tracked.
     temp_name_to_current_path: HashMap<String, PathBuf>,
+    /// Tracks the most recent agent that modified each internal file during the turn.
+    last_editor: HashMap<String, Option<String>>,
     /// Cache of known git worktree roots to avoid repeated filesystem walks.
     git_root_cache: Vec<PathBuf>,
 }
@@ -51,10 +60,19 @@ impl TurnDiffTracker {
     /// - Creates an in-memory baseline snapshot for files that already exist on disk when first seen.
     /// - For additions, we intentionally do not create a baseline snapshot so that diffs are proper additions.
     /// - Also updates internal mappings for move/rename events.
-    pub fn on_patch_begin(&mut self, changes: &HashMap<PathBuf, FileChange>) {
+    pub fn on_patch_begin(
+        &mut self,
+        changes: &HashMap<PathBuf, FileChange>,
+        origin_agent: Option<&str>,
+    ) -> Vec<SequentialEditWarning> {
+        let mut warnings = Vec::new();
+        let origin_agent_owned = origin_agent.map(std::string::ToString::to_string);
+
         for (path, change) in changes.iter() {
             // Ensure a stable internal filename exists for this external path.
-            if !self.external_to_temp_name.contains_key(path) {
+            let internal = if let Some(existing) = self.external_to_temp_name.get(path) {
+                existing.clone()
+            } else {
                 let internal = Uuid::new_v4().to_string();
                 self.external_to_temp_name
                     .insert(path.clone(), internal.clone());
@@ -91,7 +109,9 @@ impl TurnDiffTracker {
                     self.baseline_file_info
                         .insert(internal.clone(), baseline_file_info);
                 }
-            }
+
+                internal
+            };
 
             // Track rename/move in current mapping if provided in an Update.
             if let FileChange::Update {
@@ -99,32 +119,44 @@ impl TurnDiffTracker {
                 ..
             } = change
             {
-                let uuid_filename = match self.external_to_temp_name.get(path) {
-                    Some(i) => i.clone(),
-                    None => {
-                        // This should be rare, but if we haven't mapped the source, create it with no baseline.
-                        let i = Uuid::new_v4().to_string();
-                        self.baseline_file_info.insert(
-                            i.clone(),
-                            BaselineFileInfo {
-                                path: path.clone(),
-                                content: vec![],
-                                mode: FileMode::Regular,
-                                oid: ZERO_OID.to_string(),
-                            },
-                        );
-                        i
-                    }
-                };
-                // Update current external mapping for temp file name.
                 self.temp_name_to_current_path
-                    .insert(uuid_filename.clone(), dest.clone());
-                // Update forward file_mapping: external current -> internal name.
+                    .insert(internal.clone(), dest.clone());
                 self.external_to_temp_name.remove(path);
                 self.external_to_temp_name
-                    .insert(dest.clone(), uuid_filename);
+                    .insert(dest.clone(), internal.clone());
             };
+
+            let (had_prev, prev_agent_opt) = match self.last_editor.get(&internal) {
+                Some(prev) => (true, prev.clone()),
+                None => (false, None),
+            };
+            let prev_agent_str = prev_agent_opt.as_deref();
+            let current_agent = origin_agent_owned.clone();
+            let current_agent_str = current_agent.as_deref();
+
+            let conflict = match (had_prev, prev_agent_str, current_agent_str) {
+                (false, _, _) => false,
+                (true, None, None) => false,
+                (true, None, Some(_)) => true,
+                (true, Some(_), None) => true,
+                (true, Some(prev), Some(current)) => prev != current,
+            };
+
+            if conflict {
+                let warning_path = self
+                    .get_path_for_internal(&internal)
+                    .unwrap_or_else(|| path.clone());
+                warnings.push(SequentialEditWarning {
+                    path: warning_path,
+                    previous_agent: prev_agent_opt.clone(),
+                    current_agent: current_agent.clone(),
+                });
+            }
+
+            self.last_editor.insert(internal, current_agent);
         }
+
+        warnings
     }
 
     fn get_path_for_internal(&self, internal: &str) -> Option<PathBuf> {
@@ -517,7 +549,7 @@ mod tests {
                 content: "foo\n".to_string(),
             },
         )]);
-        acc.on_patch_begin(&add_changes);
+        assert!(acc.on_patch_begin(&add_changes, None).is_empty());
 
         // Simulate apply: create the file on disk.
         fs::write(&file, "foo\n").unwrap();
@@ -547,7 +579,7 @@ index {ZERO_OID}..{right_oid}
                 move_path: None,
             },
         )]);
-        acc.on_patch_begin(&update_changes);
+        assert!(acc.on_patch_begin(&update_changes, None).is_empty());
 
         // Simulate apply: append a new line.
         fs::write(&file, "foo\nbar\n").unwrap();
@@ -584,7 +616,7 @@ index {ZERO_OID}..{right_oid}
                 content: "x\n".to_string(),
             },
         )]);
-        acc.on_patch_begin(&del_changes);
+        assert!(acc.on_patch_begin(&del_changes, None).is_empty());
 
         // Simulate apply: delete the file from disk.
         let baseline_mode = file_mode_for_path(&file).unwrap_or(FileMode::Regular);
@@ -622,7 +654,7 @@ index {left_oid}..{ZERO_OID}
                 move_path: Some(dest.clone()),
             },
         )]);
-        acc.on_patch_begin(&mv_changes);
+        assert!(acc.on_patch_begin(&mv_changes, None).is_empty());
 
         // Simulate apply: move and update content.
         fs::rename(&src, &dest).unwrap();
@@ -662,7 +694,7 @@ index {left_oid}..{right_oid}
                 move_path: Some(dest.clone()),
             },
         )]);
-        acc.on_patch_begin(&mv_changes);
+        assert!(acc.on_patch_begin(&mv_changes, None).is_empty());
 
         // Simulate apply: move only, no content change.
         fs::rename(&src, &dest).unwrap();
@@ -684,7 +716,7 @@ index {left_oid}..{right_oid}
                 move_path: Some(dest.clone()),
             },
         )]);
-        acc.on_patch_begin(&mv);
+        assert!(acc.on_patch_begin(&mv, None).is_empty());
         // No file existed initially; create only dest
         fs::write(&dest, "hello\n").unwrap();
         let diff = acc.get_unified_diff().unwrap().unwrap();
@@ -724,7 +756,7 @@ index {ZERO_OID}..{right_oid}
                 move_path: None,
             },
         )]);
-        acc.on_patch_begin(&update_a);
+        assert!(acc.on_patch_begin(&update_a, None).is_empty());
         // Simulate apply: modify a.txt on disk.
         fs::write(&a, "foo\nbar\n").unwrap();
         let first = acc.get_unified_diff().unwrap().unwrap();
@@ -752,7 +784,7 @@ index {left_oid}..{right_oid}
                 content: "z\n".to_string(),
             },
         )]);
-        acc.on_patch_begin(&del_b);
+        assert!(acc.on_patch_begin(&del_b, None).is_empty());
         // Simulate apply: delete b.txt.
         let baseline_mode = file_mode_for_path(&b).unwrap_or(FileMode::Regular);
         fs::remove_file(&b).unwrap();
@@ -804,7 +836,7 @@ index {left_oid_b}..{ZERO_OID}
                 move_path: None,
             },
         )]);
-        acc.on_patch_begin(&update_changes);
+        assert!(acc.on_patch_begin(&update_changes, None).is_empty());
 
         // Apply update on disk
         fs::write(&file, &right_bytes).unwrap();
@@ -840,7 +872,7 @@ Binary files differ
                 content: "foo\n".to_string(),
             },
         )]);
-        acc.on_patch_begin(&add_changes);
+        assert!(acc.on_patch_begin(&add_changes, None).is_empty());
 
         // Simulate apply: create the file on disk.
         fs::write(&file, "foo\n").unwrap();
@@ -870,7 +902,7 @@ index {ZERO_OID}..{right_oid}
                 move_path: None,
             },
         )]);
-        acc.on_patch_begin(&update_changes);
+        assert!(acc.on_patch_begin(&update_changes, None).is_empty());
 
         // Simulate apply: append a new line with a space.
         fs::write(&file, "foo\nbar baz\n").unwrap();
@@ -892,5 +924,64 @@ index {ZERO_OID}..{right_oid}
             )
         };
         assert_eq!(combined, expected_combined);
+    }
+
+    #[test]
+    fn warns_when_different_subagents_edit_same_file() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("conflict.txt");
+        fs::write(&file, "base\n").unwrap();
+
+        let mut acc = TurnDiffTracker::new();
+        let update_changes = HashMap::from([(
+            file.clone(),
+            FileChange::Update {
+                unified_diff: String::new(),
+                move_path: None,
+            },
+        )]);
+
+        assert!(
+            acc.on_patch_begin(&update_changes, Some("code-writer"))
+                .is_empty()
+        );
+
+        // Simulate a content change that would be visible after apply_patch.
+        fs::write(&file, "base\nwriter\n").unwrap();
+
+        let warnings = acc.on_patch_begin(&update_changes, Some("code-reviewer"));
+        assert_eq!(warnings.len(), 1);
+        let warning = &warnings[0];
+        assert_eq!(warning.path.as_path(), file.as_path());
+        assert_eq!(warning.previous_agent.as_deref(), Some("code-writer"));
+        assert_eq!(warning.current_agent.as_deref(), Some("code-reviewer"));
+    }
+
+    #[test]
+    fn warns_when_main_session_edits_after_subagent() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("handoff.txt");
+        fs::write(&file, "spec\n").unwrap();
+
+        let mut acc = TurnDiffTracker::new();
+        let update_changes = HashMap::from([(
+            file.clone(),
+            FileChange::Update {
+                unified_diff: String::new(),
+                move_path: None,
+            },
+        )]);
+
+        assert!(
+            acc.on_patch_begin(&update_changes, Some("code-reviewer"))
+                .is_empty()
+        );
+
+        let warnings = acc.on_patch_begin(&update_changes, None);
+        assert_eq!(warnings.len(), 1);
+        let warning = &warnings[0];
+        assert_eq!(warning.path.as_path(), file.as_path());
+        assert_eq!(warning.previous_agent.as_deref(), Some("code-reviewer"));
+        assert!(warning.current_agent.is_none());
     }
 }

@@ -28,6 +28,7 @@ pub(crate) fn create_diff_summary(
     event_type: PatchEventType,
     cwd: &Path,
     wrap_cols: usize,
+    origin_agent: Option<&str>,
 ) -> Vec<RtLine<'static>> {
     let rows = collect_rows(changes);
     let header_kind = match event_type {
@@ -40,7 +41,7 @@ pub(crate) fn create_diff_summary(
         }
         PatchEventType::ApprovalRequest => HeaderKind::ProposedChange,
     };
-    render_changes_block(rows, wrap_cols, header_kind, cwd)
+    render_changes_block(rows, wrap_cols, header_kind, cwd, origin_agent)
 }
 
 // Shared row for per-file presentation
@@ -92,6 +93,7 @@ fn render_changes_block(
     wrap_cols: usize,
     header_kind: HeaderKind,
     cwd: &Path,
+    origin_agent: Option<&str>,
 ) -> Vec<RtLine<'static>> {
     let mut out: Vec<RtLine<'static>> = Vec::new();
     let term_cols = wrap_cols;
@@ -164,6 +166,12 @@ fn render_changes_block(
                 header_spans.extend(render_line_count_summary(total_added, total_removed));
             }
         }
+    }
+    if let Some(agent) = origin_agent {
+        header_spans.push(" ".into());
+        header_spans.push("by".dim());
+        header_spans.push(" ".into());
+        header_spans.push(agent.to_string().cyan().bold());
     }
     out.push(RtLine::from(header_spans));
 
@@ -389,7 +397,7 @@ mod tests {
         changes: &HashMap<PathBuf, FileChange>,
         event_type: PatchEventType,
     ) -> Vec<RtLine<'static>> {
-        create_diff_summary(changes, event_type, &PathBuf::from("/"), 80)
+        create_diff_summary(changes, event_type, &PathBuf::from("/"), 80, None)
     }
 
     fn snapshot_lines(name: &str, lines: Vec<RtLine<'static>>, width: u16, height: u16) {
@@ -688,6 +696,7 @@ mod tests {
             },
             &PathBuf::from("/"),
             72,
+            None,
         );
 
         // Render with backend width wider than wrap width to avoid Paragraph auto-wrap.
@@ -718,6 +727,7 @@ mod tests {
             },
             &PathBuf::from("/"),
             28,
+            None,
         );
         // Drop the combined header for this text-only snapshot
         if !lines.is_empty() {
@@ -752,6 +762,7 @@ mod tests {
             },
             &cwd,
             80,
+            None,
         );
 
         snapshot_lines("apply_update_block_relativizes_path", lines, 80, 10);

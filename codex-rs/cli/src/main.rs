@@ -24,9 +24,11 @@ use supports_color::Stream;
 
 mod mcp_cmd;
 mod pre_main_hardening;
+mod subagents_cmd;
 
 use crate::mcp_cmd::McpCli;
 use crate::proto::ProtoCli;
+use crate::subagents_cmd::SubagentsCli;
 
 /// Codex CLI
 ///
@@ -84,6 +86,9 @@ enum Subcommand {
 
     /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
     Resume(ResumeCommand),
+
+    /// Inspect and run subagents locally.
+    Subagents(SubagentsCli),
 
     /// Internal: generate TypeScript protocol bindings.
     #[clap(hide = true)]
@@ -251,6 +256,13 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             );
             let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
             print_exit_messages(exit_info);
+        }
+        Some(Subcommand::Subagents(mut subagents_cli)) => {
+            prepend_config_flags(
+                &mut subagents_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            subagents_cli.run().await?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             prepend_config_flags(

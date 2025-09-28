@@ -144,6 +144,8 @@ pub struct Config {
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
 
+    pub subagents: SubagentSettings,
+
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
     pub file_opener: UriBasedFileOpener,
@@ -199,6 +201,13 @@ pub struct Config {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SubagentSettings {
+    pub enabled: bool,
+    pub auto_route: bool,
+    pub active_agent: Option<String>,
+    pub tool_allowlist: Option<Vec<String>>,
 }
 
 impl Config {
@@ -715,6 +724,9 @@ pub struct ConfigToml {
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
 
+    #[serde(default)]
+    pub subagents: Option<SubagentsToml>,
+
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
@@ -747,6 +759,13 @@ impl From<ConfigToml> for UserSavedConfig {
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
     pub trust_level: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct SubagentsToml {
+    pub enabled: Option<bool>,
+    pub auto_route: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
@@ -952,6 +971,32 @@ impl Config {
 
         let history = cfg.history.unwrap_or_default();
 
+        let subagents_cfg = cfg.subagents.clone().unwrap_or_default();
+        let env_subagents_enabled = match std::env::var("CODEX_SUBAGENTS_ENABLED") {
+            Ok(value) => {
+                let normalized = value.trim().to_ascii_lowercase();
+                match normalized.as_str() {
+                    "1" | "true" | "yes" | "on" => Some(true),
+                    "0" | "false" | "no" | "off" => Some(false),
+                    _ => {
+                        tracing::warn!(
+                            value = normalized.as_str(),
+                            "Ignoring invalid CODEX_SUBAGENTS_ENABLED value"
+                        );
+                        None
+                    }
+                }
+            }
+            Err(_) => None,
+        };
+        let subagents_settings = SubagentSettings {
+            enabled: env_subagents_enabled
+                .unwrap_or_else(|| subagents_cfg.enabled.unwrap_or(false)),
+            auto_route: subagents_cfg.auto_route.unwrap_or(false),
+            active_agent: None,
+            tool_allowlist: None,
+        };
+
         let tools_web_search_request = override_tools_web_search_request
             .or(cfg.tools.as_ref().and_then(|t| t.web_search))
             .unwrap_or(false);
@@ -1030,6 +1075,7 @@ impl Config {
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
             codex_home,
             history,
+            subagents: subagents_settings,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
 
@@ -1790,6 +1836,7 @@ model_verbosity = "high"
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 codex_home: fixture.codex_home(),
                 history: History::default(),
+                subagents: SubagentSettings::default(),
                 file_opener: UriBasedFileOpener::VsCode,
                 codex_linux_sandbox_exe: None,
                 hide_agent_reasoning: false,
@@ -1849,6 +1896,7 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             codex_home: fixture.codex_home(),
             history: History::default(),
+            subagents: SubagentSettings::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
@@ -1923,6 +1971,7 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             codex_home: fixture.codex_home(),
             history: History::default(),
+            subagents: SubagentSettings::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
@@ -1983,6 +2032,7 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             codex_home: fixture.codex_home(),
             history: History::default(),
+            subagents: SubagentSettings::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,

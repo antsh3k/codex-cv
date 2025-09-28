@@ -338,8 +338,12 @@ impl App {
             enhanced_keys_supported: self.enhanced_keys_supported,
             auth_manager: self.auth_manager.clone(),
         };
-        self.chat_widget =
-            crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);
+        self.chat_widget = crate::chatwidget::ChatWidget::new_from_existing(
+            init,
+            conv,
+            session_configured,
+            self.server.clone(),
+        );
         // Trim transcript up to the selected user message and re-render it.
         self.trim_transcript_for_backtrack(nth_user_message);
         self.render_transcript_once(tui);

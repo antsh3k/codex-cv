@@ -29,11 +29,15 @@ pub(crate) enum ApprovalRequest {
         id: String,
         command: Vec<String>,
         reason: Option<String>,
+        origin_agent: Option<String>,
+        model: Option<String>,
     },
     ApplyPatch {
         id: String,
         reason: Option<String>,
         grant_root: Option<PathBuf>,
+        origin_agent: Option<String>,
+        model: Option<String>,
     },
 }
 
@@ -130,10 +134,18 @@ impl ApprovalOverlay {
         };
         if let Some(state) = self.current.as_ref() {
             match (&state.variant, option.decision) {
-                (ApprovalVariant::Exec { id, command }, decision) => {
-                    self.handle_exec_decision(id, command, decision);
+                (
+                    ApprovalVariant::Exec {
+                        id,
+                        command,
+                        origin_agent,
+                        model,
+                    },
+                    decision,
+                ) => {
+                    self.handle_exec_decision(id, command, origin_agent, model, decision);
                 }
-                (ApprovalVariant::ApplyPatch { id, .. }, decision) => {
+                (ApprovalVariant::ApplyPatch { id }, decision) => {
                     self.handle_patch_decision(id, decision);
                 }
             }
@@ -143,8 +155,20 @@ impl ApprovalOverlay {
         self.advance_queue();
     }
 
-    fn handle_exec_decision(&self, id: &str, command: &[String], decision: ReviewDecision) {
-        if let Some(lines) = build_exec_history_lines(command.to_vec(), decision) {
+    fn handle_exec_decision(
+        &self,
+        id: &str,
+        command: &[String],
+        origin_agent: &Option<String>,
+        model: &Option<String>,
+        decision: ReviewDecision,
+    ) {
+        if let Some(lines) = build_exec_history_lines(
+            command.to_vec(),
+            decision,
+            origin_agent.clone(),
+            model.clone(),
+        ) {
             self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                 history_cell::new_user_approval_decision(lines),
             )));
@@ -218,10 +242,21 @@ impl BottomPaneView for ApprovalOverlay {
             && let Some(state) = self.current.as_ref()
         {
             match &state.variant {
-                ApprovalVariant::Exec { id, command } => {
-                    self.handle_exec_decision(id, command, ReviewDecision::Abort);
+                ApprovalVariant::Exec {
+                    id,
+                    command,
+                    origin_agent,
+                    model,
+                } => {
+                    self.handle_exec_decision(
+                        id,
+                        command,
+                        origin_agent,
+                        model,
+                        ReviewDecision::Abort,
+                    );
                 }
-                ApprovalVariant::ApplyPatch { id, .. } => {
+                ApprovalVariant::ApplyPatch { id } => {
                     self.handle_patch_decision(id, ReviewDecision::Abort);
                 }
             }
@@ -268,8 +303,11 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 id,
                 command,
                 reason,
+                origin_agent,
+                model,
             } => {
                 let mut header = Vec::new();
+                append_requester_header(&mut header, &origin_agent, &model);
                 if let Some(reason) = reason
                     && !reason.is_empty()
                 {
@@ -288,7 +326,12 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                     header.push(HeaderLine::Spacer);
                 }
                 Self {
-                    variant: ApprovalVariant::Exec { id, command },
+                    variant: ApprovalVariant::Exec {
+                        id,
+                        command,
+                        origin_agent,
+                        model,
+                    },
                     header,
                 }
             }
@@ -296,8 +339,11 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 id,
                 reason,
                 grant_root,
+                origin_agent,
+                model,
             } => {
                 let mut header = Vec::new();
+                append_requester_header(&mut header, &origin_agent, &model);
                 if let Some(reason) = reason
                     && !reason.is_empty()
                 {
@@ -326,9 +372,34 @@ impl From<ApprovalRequest> for ApprovalRequestState {
     }
 }
 
+fn append_requester_header(
+    header: &mut Vec<HeaderLine>,
+    origin_agent: &Option<String>,
+    model: &Option<String>,
+) {
+    if let Some(agent) = origin_agent.as_ref() {
+        let mut text = format!("Requested by {agent}");
+        if let Some(model) = model.as_ref() {
+            text.push_str(&format!(" (model: {model})"));
+        }
+        header.push(HeaderLine::Text {
+            text,
+            italic: false,
+        });
+        header.push(HeaderLine::Spacer);
+    }
+}
+
 enum ApprovalVariant {
-    Exec { id: String, command: Vec<String> },
-    ApplyPatch { id: String },
+    Exec {
+        id: String,
+        command: Vec<String>,
+        origin_agent: Option<String>,
+        model: Option<String>,
+    },
+    ApplyPatch {
+        id: String,
+    },
 }
 
 #[derive(Clone)]
@@ -383,6 +454,8 @@ fn patch_options() -> Vec<ApprovalOption> {
 fn build_exec_history_lines(
     command: Vec<String>,
     decision: ReviewDecision,
+    origin_agent: Option<String>,
+    model: Option<String>,
 ) -> Option<Vec<Line<'static>>> {
     use ReviewDecision::*;
 
@@ -440,6 +513,16 @@ fn build_exec_history_lines(
     };
 
     let mut lines = Vec::new();
+    if let Some(agent) = origin_agent {
+        let mut info_spans = Vec::new();
+        info_spans.push("Requested by ".dim());
+        info_spans.push(agent.cyan().bold());
+        if let Some(model) = model {
+            info_spans.push(" ".into());
+            info_spans.push(format!("(model: {model})").dim());
+        }
+        lines.push(Line::from(info_spans));
+    }
     let mut spans = Vec::new();
     spans.push(symbol);
     spans.extend(summary);
@@ -472,6 +555,8 @@ mod tests {
             id: "test".to_string(),
             command: vec!["echo".to_string(), "hi".to_string()],
             reason: Some("reason".to_string()),
+            origin_agent: Some("code-writer".to_string()),
+            model: Some("gpt-4.2".to_string()),
         }
     }
 
@@ -513,6 +598,8 @@ mod tests {
             id: "test".into(),
             command,
             reason: None,
+            origin_agent: Some("code-reviewer".to_string()),
+            model: Some("gpt-4-mini".to_string()),
         };
 
         let view = ApprovalOverlay::new(exec_request, tx);
@@ -531,6 +618,12 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("Command: echo hello world")),
             "expected header to include command snippet, got {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("Requested by code-reviewer (model: gpt-4-mini)")),
+            "expected header to include requester label, got {rendered:?}"
         );
     }
 

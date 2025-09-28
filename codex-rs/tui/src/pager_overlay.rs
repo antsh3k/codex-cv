@@ -661,6 +661,7 @@ mod tests {
             PatchEventType::ApprovalRequest,
             approval_changes,
             &cwd,
+            None,
         ));
         cells.push(approval_cell);
 
@@ -677,6 +678,7 @@ mod tests {
             },
             apply_changes,
             &cwd,
+            None,
         ));
         cells.push(apply_begin_cell);
 

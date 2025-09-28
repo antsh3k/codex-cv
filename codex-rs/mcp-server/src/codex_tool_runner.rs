@@ -178,6 +178,7 @@ async fn run_codex_tool_session_inner(
                         cwd,
                         call_id,
                         reason: _,
+                        ..
                     }) => {
                         handle_exec_approval_request(
                             command,
@@ -205,6 +206,7 @@ async fn run_codex_tool_session_inner(
                         reason,
                         grant_root,
                         changes,
+                        ..
                     }) => {
                         handle_patch_approval_request(
                             call_id,
@@ -281,7 +283,10 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::UserMessage(_)
                     | EventMsg::ShutdownComplete
                     | EventMsg::EnteredReviewMode(_)
-                    | EventMsg::ExitedReviewMode(_) => {
+                    | EventMsg::ExitedReviewMode(_)
+                    | EventMsg::SubAgentStarted(_)
+                    | EventMsg::SubAgentMessage(_)
+                    | EventMsg::SubAgentCompleted(_) => {
                         // For now, we do not do anything extra for these
                         // events. Note that
                         // send(codex_event_to_notification(&event)) above has

@@ -378,6 +378,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 call_id,
                 auto_approved,
                 changes,
+                ..
             }) => {
                 // Store metadata so we can calculate duration later when we
                 // receive the corresponding PatchApplyEnd event.
@@ -596,6 +597,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::UserMessage(_) => {}
             EventMsg::EnteredReviewMode(_) => {}
             EventMsg::ExitedReviewMode(_) => {}
+            EventMsg::SubAgentStarted(_) => {}
+            EventMsg::SubAgentMessage(_) => {}
+            EventMsg::SubAgentCompleted(_) => {}
         }
         CodexStatus::Running
     }
