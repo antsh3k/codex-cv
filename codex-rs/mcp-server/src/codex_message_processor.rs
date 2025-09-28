@@ -3,6 +3,7 @@ use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::json_to_toml::json_to_toml;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use crate::outgoing_message::OutgoingNotificationMeta;
 use codex_core::AuthManager;
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
@@ -33,6 +34,8 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::InputItem as CoreInputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_core::subagents::SubagentInvocation;
+use codex_core::subagents::SubagentOrchestrator;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
@@ -76,12 +79,18 @@ use codex_protocol::mcp_protocol::SendUserTurnResponse;
 use codex_protocol::mcp_protocol::ServerNotification;
 use codex_protocol::mcp_protocol::SetDefaultModelParams;
 use codex_protocol::mcp_protocol::SetDefaultModelResponse;
+use codex_protocol::mcp_protocol::SubagentListAgent;
+use codex_protocol::mcp_protocol::SubagentParseError;
+use codex_protocol::mcp_protocol::SubagentsListResponse;
+use codex_protocol::mcp_protocol::SubagentsRunParams;
+use codex_protocol::mcp_protocol::SubagentsRunResponse;
 use codex_protocol::mcp_protocol::UserInfoResponse;
 use codex_protocol::mcp_protocol::UserSavedConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InputMessageKind;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+use codex_subagents::SubagentRegistry;
 use mcp_types::JSONRPCErrorError;
 use mcp_types::RequestId;
 use std::collections::HashMap;
@@ -122,6 +131,7 @@ pub(crate) struct CodexMessageProcessor {
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<RequestId>>>>,
+    conversation_configs: Arc<Mutex<HashMap<ConversationId, Config>>>,
 }
 
 impl CodexMessageProcessor {
@@ -141,6 +151,7 @@ impl CodexMessageProcessor {
             conversation_listeners: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
+            conversation_configs: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -205,6 +216,12 @@ impl CodexMessageProcessor {
             }
             ClientRequest::UserInfo { request_id } => {
                 self.get_user_info(request_id).await;
+            }
+            ClientRequest::SubagentsList { request_id } => {
+                self.handle_subagents_list(request_id).await;
+            }
+            ClientRequest::SubagentsRun { request_id, params } => {
+                self.handle_subagents_run(request_id, params).await;
             }
             ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
@@ -516,6 +533,197 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    async fn handle_subagents_list(&self, request_id: RequestId) {
+        let project_dir = self.config.cwd.join(".codex/agents");
+        let user_dir = self.config.codex_home.join("agents");
+        let mut registry = SubagentRegistry::new(project_dir, user_dir);
+        let snapshot = match registry.reload() {
+            Ok(snapshot) => snapshot.clone(),
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to load subagent registry: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let agents: Vec<SubagentListAgent> = snapshot
+            .agents
+            .into_iter()
+            .map(|handle| {
+                let metadata = &handle.spec.metadata;
+                let source_path = handle
+                    .spec
+                    .source_path
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().to_string());
+                SubagentListAgent {
+                    name: metadata.name.clone(),
+                    description: metadata.description.clone(),
+                    model: metadata.model.clone(),
+                    tools: metadata.tools.clone(),
+                    keywords: metadata.keywords.clone(),
+                    source: handle.spec.source.describe().to_string(),
+                    source_path,
+                    warnings: handle.warnings.clone(),
+                }
+            })
+            .collect();
+
+        let parse_errors: Vec<SubagentParseError> = snapshot
+            .parse_errors
+            .into_iter()
+            .map(|err| SubagentParseError {
+                path: err.path.to_string_lossy().to_string(),
+                message: err.message,
+            })
+            .collect();
+
+        let response = SubagentsListResponse {
+            agents,
+            parse_errors,
+        };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn handle_subagents_run(&self, request_id: RequestId, params: SubagentsRunParams) {
+        let SubagentsRunParams {
+            conversation_id,
+            agent_name,
+            prompt,
+        } = params;
+
+        if self
+            .conversation_manager
+            .get_conversation(conversation_id)
+            .await
+            .is_err()
+        {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("conversation {conversation_id} not found"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let config = {
+            let configs = self.conversation_configs.lock().await;
+            configs.get(&conversation_id).cloned()
+        };
+        let config = if let Some(cfg) = config {
+            cfg
+        } else {
+            let error = JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("configuration for conversation {conversation_id} is unavailable"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        };
+
+        if !config.subagents.enabled {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "subagents feature is disabled for this conversation".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let project_dir = config.cwd.join(".codex/agents");
+        let user_dir = config.codex_home.join("agents");
+        let mut registry = SubagentRegistry::new(project_dir, user_dir);
+        let snapshot = match registry.reload() {
+            Ok(snapshot) => snapshot.clone(),
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to load subagent registry: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let handle = match snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.spec.metadata.name.eq_ignore_ascii_case(&agent_name))
+        {
+            Some(handle) => handle.clone(),
+            None => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("subagent '{agent_name}' not found"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let spec = handle.spec;
+        let prompt_for_run = prompt.clone();
+        let outgoing = self.outgoing.clone();
+        let conversation_manager = self.conversation_manager.clone();
+        let meta = OutgoingNotificationMeta::new(Some(request_id.clone()));
+        let parent_submit_id = format!("mcp-subagent-{}", Uuid::now_v7());
+        let agent_display = spec.metadata.name.clone();
+        let response_request_id = request_id.clone();
+        tokio::spawn(async move {
+            let orchestrator = SubagentOrchestrator::new(conversation_manager);
+            let run_result = orchestrator
+                .run_subagent(
+                    &config,
+                    SubagentInvocation {
+                        spec: &spec,
+                        parent_submit_id: parent_submit_id.clone(),
+                    },
+                    prompt_for_run,
+                    |msg| {
+                        let outgoing = outgoing.clone();
+                        let meta = meta.clone();
+                        let parent_submit_id = parent_submit_id.clone();
+                        tokio::spawn(async move {
+                            let event = Event {
+                                id: parent_submit_id,
+                                msg,
+                            };
+                            outgoing
+                                .send_event_as_notification(&event, Some(meta))
+                                .await;
+                        });
+                    },
+                )
+                .await;
+
+            match run_result {
+                Ok(state) => {
+                    let response = SubagentsRunResponse {
+                        sub_conversation_id: state.conversation_id,
+                    };
+                    outgoing.send_response(response_request_id, response).await;
+                }
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("failed to run subagent '{agent_display}': {err}"),
+                        data: None,
+                    };
+                    outgoing.send_error(response_request_id, error).await;
+                }
+            }
+        });
+    }
+
     async fn set_default_model(&self, request_id: RequestId, params: SetDefaultModelParams) {
         let SetDefaultModelParams {
             model,
@@ -635,6 +843,7 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let config_clone = config.clone();
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(conversation_id) => {
@@ -643,6 +852,10 @@ impl CodexMessageProcessor {
                     session_configured,
                     ..
                 } = conversation_id;
+                {
+                    let mut configs = self.conversation_configs.lock().await;
+                    configs.insert(conversation_id, config_clone);
+                }
                 let response = NewConversationResponse {
                     conversation_id,
                     model: session_configured.model,
@@ -737,6 +950,7 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let config_clone = config.clone();
 
         match self
             .conversation_manager
@@ -752,6 +966,10 @@ impl CodexMessageProcessor {
                 session_configured,
                 ..
             }) => {
+                {
+                    let mut configs = self.conversation_configs.lock().await;
+                    configs.insert(conversation_id, config_clone);
+                }
                 let event = Event {
                     id: "".to_string(),
                     msg: EventMsg::SessionConfigured(session_configured.clone()),
@@ -850,6 +1068,10 @@ impl CodexMessageProcessor {
             .conversation_manager
             .remove_conversation(&conversation_id)
             .await;
+        {
+            let mut configs = self.conversation_configs.lock().await;
+            configs.remove(&conversation_id);
+        }
         if let Some(conversation) = removed_conversation {
             info!("conversation {conversation_id} was active; shutting down");
             let conversation_clone = conversation.clone();
@@ -1183,6 +1405,7 @@ async fn apply_bespoke_event_handling(
             changes,
             reason,
             grant_root,
+            ..
         }) => {
             let params = ApplyPatchApprovalParams {
                 conversation_id,
@@ -1205,6 +1428,7 @@ async fn apply_bespoke_event_handling(
             command,
             cwd,
             reason,
+            ..
         }) => {
             let params = ExecCommandApprovalParams {
                 conversation_id,

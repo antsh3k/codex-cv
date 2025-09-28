@@ -123,6 +123,7 @@ impl App {
                     init,
                     resumed.conversation,
                     resumed.session_configured,
+                    conversation_manager.clone(),
                 )
             }
         };

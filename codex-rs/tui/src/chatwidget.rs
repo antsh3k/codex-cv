@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
 use codex_core::config::Config;
 use codex_core::config_types::Notifications;
@@ -33,6 +36,10 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
+use codex_core::protocol::SubAgentCompletedEvent;
+use codex_core::protocol::SubAgentMessageEvent;
+use codex_core::protocol::SubAgentOutcome;
+use codex_core::protocol::SubAgentStartedEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
@@ -41,8 +48,12 @@ use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::UserMessageEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_core::subagents::SubagentInvocation;
+use codex_core::subagents::SubagentOrchestrator;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_subagents::RegistrySnapshot;
+use codex_subagents::SubagentRegistry;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -52,6 +63,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::UnboundedSender;
@@ -80,6 +93,7 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PatchEventType;
+use crate::history_cell::PlainHistoryCell;
 use crate::markdown::append_markdown;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
@@ -240,6 +254,7 @@ pub(crate) struct ChatWidget {
     full_reasoning_buffer: String,
     conversation_id: Option<ConversationId>,
     frame_requester: FrameRequester,
+    conversation_manager: Arc<ConversationManager>,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
     // When resuming an existing session (selected via resume picker), avoid an
@@ -256,11 +271,29 @@ pub(crate) struct ChatWidget {
     ghost_snapshots_disabled: bool,
     // Whether to add a final message separator after the last message
     needs_final_message_separator: bool,
+    subagent_stats: SubagentStats,
 }
 
 struct UserMessage {
     text: String,
     image_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+struct SubagentRun {
+    agent_name: String,
+    model: Option<String>,
+    last_message: Option<String>,
+    started_at: Instant,
+    duration: Option<Duration>,
+}
+
+#[derive(Default)]
+struct SubagentStats {
+    total_started: usize,
+    total_completed: usize,
+    total_failed: usize,
+    active: HashMap<String, SubagentRun>,
 }
 
 impl From<String> for UserMessage {
@@ -530,6 +563,7 @@ impl ChatWidget {
             },
             event.changes,
             &self.config.cwd,
+            event.origin_agent,
         ));
     }
 
@@ -591,6 +625,8 @@ impl ChatWidget {
 
     fn on_background_event(&mut self, message: String) {
         debug!("BackgroundEvent: {message}");
+        self.add_to_history(history_cell::new_warning_event(message));
+        self.request_redraw();
     }
 
     fn on_stream_error(&mut self, message: String) {
@@ -734,6 +770,8 @@ impl ChatWidget {
             id,
             command: ev.command,
             reason: ev.reason,
+            origin_agent: ev.origin_agent,
+            model: ev.model,
         };
         self.bottom_pane.push_approval_request(request);
         self.request_redraw();
@@ -749,12 +787,15 @@ impl ChatWidget {
             PatchEventType::ApprovalRequest,
             ev.changes.clone(),
             &self.config.cwd,
+            ev.origin_agent.clone(),
         ));
 
         let request = ApprovalRequest::ApplyPatch {
             id,
             reason: ev.reason,
             grant_root: ev.grant_root,
+            origin_agent: ev.origin_agent,
+            model: ev.model,
         };
         self.bottom_pane.push_approval_request(request);
         self.request_redraw();
@@ -873,11 +914,16 @@ impl ChatWidget {
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
-        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
+        let codex_op_tx = spawn_agent(
+            config.clone(),
+            app_event_tx.clone(),
+            conversation_manager.clone(),
+        );
 
         Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
+            conversation_manager,
             codex_op_tx,
             bottom_pane: BottomPane::new(BottomPaneParams {
                 frame_requester,
@@ -913,6 +959,7 @@ impl ChatWidget {
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
+            subagent_stats: SubagentStats::default(),
         }
     }
 
@@ -921,6 +968,7 @@ impl ChatWidget {
         common: ChatWidgetInit,
         conversation: std::sync::Arc<codex_core::CodexConversation>,
         session_configured: codex_core::protocol::SessionConfiguredEvent,
+        conversation_manager: Arc<ConversationManager>,
     ) -> Self {
         let ChatWidgetInit {
             config,
@@ -940,6 +988,7 @@ impl ChatWidget {
         Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
+            conversation_manager,
             codex_op_tx,
             bottom_pane: BottomPane::new(BottomPaneParams {
                 frame_requester,
@@ -975,6 +1024,7 @@ impl ChatWidget {
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
+            subagent_stats: SubagentStats::default(),
         }
     }
 
@@ -1092,6 +1142,16 @@ impl ChatWidget {
             SlashCommand::Review => {
                 self.open_review_popup();
             }
+            SlashCommand::Agents => {
+                self.show_subagent_list();
+            }
+            SlashCommand::SubagentStatus => {
+                self.show_subagent_status();
+            }
+            SlashCommand::Use => {
+                self.bottom_pane.set_composer_text("/use ".to_string());
+                self.request_redraw();
+            }
             SlashCommand::Model => {
                 self.open_model_popup();
             }
@@ -1170,6 +1230,9 @@ impl ChatWidget {
                             ),
                         ]),
                         reason: None,
+                        origin_agent: Some("debug-agent".to_string()),
+                        model: Some("debug-model".to_string()),
+                        sub_conversation_id: None,
                         grant_root: Some(PathBuf::from("/tmp")),
                     }),
                 }));
@@ -1223,6 +1286,65 @@ impl ChatWidget {
         let UserMessage { text, image_paths } = user_message;
         if text.is_empty() && image_paths.is_empty() {
             return;
+        }
+
+        if let Some(first_line) = text.lines().next()
+            && let Some(stripped) = first_line.strip_prefix('/')
+        {
+            let trimmed = stripped.trim_start();
+            if let Some(cmd_token) = trimmed.split_whitespace().next()
+                && let Ok(cmd) = SlashCommand::from_str(cmd_token)
+            {
+                if !image_paths.is_empty() {
+                    self.add_error_message(
+                        "Slash commands do not support image attachments.".to_string(),
+                    );
+                    return;
+                }
+
+                let mut prompt_start = 1 + cmd_token.len();
+                while text.as_bytes().get(prompt_start) == Some(&b' ') {
+                    prompt_start += 1;
+                }
+                let prompt_slice = if prompt_start < text.len() {
+                    &text[prompt_start..]
+                } else {
+                    ""
+                };
+                let prompt_str = prompt_slice.trim();
+
+                match cmd {
+                    SlashCommand::Agents => {
+                        self.show_subagent_list();
+                        return;
+                    }
+                    SlashCommand::SubagentStatus => {
+                        self.show_subagent_status();
+                        return;
+                    }
+                    SlashCommand::Use => {
+                        let mut parts = prompt_str.split_whitespace();
+                        let agent_name = match parts.next() {
+                            Some(name) => name,
+                            None => {
+                                self.add_error_message(
+                                    "Usage: /use <agent-name> [prompt]".to_string(),
+                                );
+                                return;
+                            }
+                        };
+                        let remaining_prompt = parts.collect::<Vec<_>>().join(" ");
+                        let prompt = if remaining_prompt.is_empty() {
+                            None
+                        } else {
+                            Some(remaining_prompt)
+                        };
+                        self.handle_use_command(agent_name, prompt);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
         }
 
         self.capture_ghost_snapshot();
@@ -1420,6 +1542,9 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
+            EventMsg::SubAgentStarted(ev) => self.on_subagent_started(ev),
+            EventMsg::SubAgentMessage(ev) => self.on_subagent_message(ev),
+            EventMsg::SubAgentCompleted(ev) => self.on_subagent_completed(ev),
         }
     }
 
@@ -1691,6 +1816,162 @@ impl ChatWidget {
         self.config.model = model.to_string();
     }
 
+    fn show_subagent_list(&mut self) {
+        match self.load_subagent_snapshot() {
+            Ok(snapshot) => {
+                let cell = self.render_subagent_snapshot(&snapshot);
+                self.add_to_history(cell);
+                self.request_redraw();
+            }
+            Err(err) => self.add_error_message(err),
+        }
+    }
+
+    fn show_subagent_status(&mut self) {
+        let cell = self.subagent_stats.summary_cell();
+        self.add_to_history(cell);
+        self.request_redraw();
+    }
+
+    fn refresh_subagent_status_overlay(&mut self) {
+        let summary = self.subagent_stats.status_summary();
+        self.bottom_pane.set_subagent_summary(summary);
+    }
+
+    fn handle_use_command(&mut self, agent_name: &str, prompt: Option<String>) {
+        if !self.config.subagents.enabled {
+            self.add_error_message(
+                "Subagents feature is disabled in the current configuration.".to_string(),
+            );
+            return;
+        }
+
+        let snapshot = match self.load_subagent_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                self.add_error_message(err);
+                return;
+            }
+        };
+
+        let Some(handle) = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.spec.metadata.name.eq_ignore_ascii_case(agent_name))
+        else {
+            self.add_error_message(format!("Subagent '{agent_name}' not found."));
+            return;
+        };
+
+        let spec = handle.spec.clone();
+        let resolved_name = spec.metadata.name.clone();
+        let config = self.config.clone();
+        let conversation_manager = self.conversation_manager.clone();
+        let app_event_tx = self.app_event_tx.clone();
+        let prompt_for_run = prompt;
+        let parent_submit_id = format!("subagent-{:016x}", rand::random::<u64>());
+
+        tokio::spawn(async move {
+            let orchestrator = SubagentOrchestrator::new(conversation_manager);
+            let invocation = SubagentInvocation {
+                spec: &spec,
+                parent_submit_id: parent_submit_id.clone(),
+            };
+
+            let run_result = orchestrator
+                .run_subagent(&config, invocation, prompt_for_run, |msg| {
+                    app_event_tx.send(AppEvent::CodexEvent(Event {
+                        id: parent_submit_id.clone(),
+                        msg,
+                    }));
+                })
+                .await;
+
+            if let Err(err) = run_result {
+                app_event_tx.send(AppEvent::CodexEvent(Event {
+                    id: parent_submit_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: format!("Failed to run subagent '{resolved_name}': {err}"),
+                    }),
+                }));
+            }
+        });
+    }
+
+    fn load_subagent_snapshot(&self) -> Result<RegistrySnapshot, String> {
+        let project_dir = self.config.cwd.join(".codex/agents");
+        let user_dir = self.config.codex_home.join("agents");
+        let mut registry = SubagentRegistry::new(project_dir, user_dir);
+        registry.reload().cloned().map_err(|err| err.to_string())
+    }
+
+    fn render_subagent_snapshot(&self, snapshot: &RegistrySnapshot) -> PlainHistoryCell {
+        let mut lines: Vec<Line> = Vec::new();
+        lines.push(
+            vec![
+                "Subagents".bold(),
+                format!(" ({})", snapshot.agents.len()).dim(),
+            ]
+            .into(),
+        );
+
+        if snapshot.agents.is_empty() {
+            lines.push("  (none discovered)".into());
+        } else {
+            let total = snapshot.agents.len();
+            for (idx, handle) in snapshot.agents.iter().enumerate() {
+                let metadata = &handle.spec.metadata;
+                lines.push(vec!["  • ".into(), metadata.name.clone().cyan().bold()].into());
+                lines.push(
+                    vec!["      source: ".dim(), handle.spec.source.describe().into()].into(),
+                );
+                if let Some(desc) = metadata.description.as_ref() {
+                    lines.push(vec!["      ".into(), desc.clone().into()].into());
+                }
+                let model_text = metadata
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| "<session default>".to_string());
+                lines.push(vec!["      model: ".dim(), model_text.into()].into());
+                let tools = if metadata.tools.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    metadata.tools.join(", ")
+                };
+                lines.push(vec!["      tools: ".dim(), tools.into()].into());
+                if !metadata.keywords.is_empty() {
+                    lines.push(
+                        vec![
+                            "      keywords: ".dim(),
+                            metadata.keywords.join(", ").into(),
+                        ]
+                        .into(),
+                    );
+                }
+                for warning in &handle.warnings {
+                    lines.push(vec!["      warning: ".magenta(), warning.clone().into()].into());
+                }
+                if idx + 1 < total {
+                    lines.push(Line::from(""));
+                }
+            }
+        }
+
+        if !snapshot.parse_errors.is_empty() {
+            if !snapshot.agents.is_empty() {
+                lines.push(Line::from(""));
+            }
+            lines.push("Parse errors".red().bold().into());
+            for err in &snapshot.parse_errors {
+                lines.push(vec!["  • ".into(), err.path.display().to_string().into()].into());
+                lines.push(vec!["      ".into(), err.message.clone().into()].into());
+            }
+        }
+
+        let owned_lines = lines.into_iter().collect();
+        PlainHistoryCell::new(owned_lines)
+    }
+
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
         self.add_to_history(history_cell::new_info_event(message, hint));
         self.request_redraw();
@@ -1698,6 +1979,88 @@ impl ChatWidget {
 
     pub(crate) fn add_error_message(&mut self, message: String) {
         self.add_to_history(history_cell::new_error_event(message));
+        self.request_redraw();
+    }
+
+    fn on_subagent_started(&mut self, event: SubAgentStartedEvent) {
+        self.subagent_stats.on_started(
+            &event.sub_conversation_id,
+            event.agent_name.clone(),
+            event.model.clone(),
+        );
+        self.refresh_subagent_status_overlay();
+
+        let mut lines: Vec<Line> = Vec::new();
+        lines.push(
+            vec![
+                "subagent ".dim(),
+                event.agent_name.clone().cyan().bold(),
+                " started".into(),
+            ]
+            .into(),
+        );
+        if let Some(model) = event.model.clone() {
+            lines.push(vec!["      model: ".dim(), model.into()].into());
+        }
+        let cell = PlainHistoryCell::new(lines.into_iter().collect());
+        self.add_to_history(cell);
+        self.request_redraw();
+    }
+
+    fn on_subagent_message(&mut self, event: SubAgentMessageEvent) {
+        self.subagent_stats
+            .on_message(&event.sub_conversation_id, event.message.clone());
+        let mut lines: Vec<Line> = Vec::new();
+        lines.push(vec!["  ↳ ".into(), event.agent_name.clone().cyan().bold()].into());
+        for line in event.message.lines() {
+            lines.push(vec!["      ".into(), line.to_string().into()].into());
+        }
+        let cell = PlainHistoryCell::new(lines.into_iter().collect());
+        self.add_to_history(cell);
+        self.request_redraw();
+    }
+
+    fn on_subagent_completed(&mut self, event: SubAgentCompletedEvent) {
+        let prior = self.subagent_stats.on_completed(
+            &event.sub_conversation_id,
+            event.outcome.clone(),
+            event.error.clone(),
+            event.duration_ms,
+        );
+        self.refresh_subagent_status_overlay();
+
+        let status_span = match event.outcome {
+            SubAgentOutcome::Success => "completed".green(),
+            SubAgentOutcome::Error => "failed".red(),
+        };
+
+        let mut lines: Vec<Line> = Vec::new();
+        lines.push(
+            vec![
+                "subagent ".dim(),
+                event.agent_name.clone().cyan().bold(),
+                " ".into(),
+                status_span,
+            ]
+            .into(),
+        );
+        if let Some(model) = event.model.clone() {
+            lines.push(vec!["      model: ".dim(), model.into()].into());
+        }
+        let duration = prior
+            .as_ref()
+            .and_then(|r| r.duration)
+            .or_else(|| event.duration_ms.map(Duration::from_millis));
+        if let Some(duration) = duration {
+            lines.push(vec!["      duration: ".dim(), format_duration(duration).into()].into());
+        }
+        if let Some(err) = event.error.as_ref() {
+            lines.push(vec!["      error: ".red(), err.clone().into()].into());
+        } else if let Some(run) = prior.as_ref().and_then(|r| r.last_message.as_ref()) {
+            lines.push(vec!["      last: ".dim(), run.clone().into()].into());
+        }
+        let cell = PlainHistoryCell::new(lines.into_iter().collect());
+        self.add_to_history(cell);
         self.request_redraw();
     }
 
@@ -2003,6 +2366,131 @@ impl WidgetRef for &ChatWidget {
     }
 }
 
+impl SubagentStats {
+    fn on_started(
+        &mut self,
+        conversation_id: &ConversationId,
+        agent_name: String,
+        model: Option<String>,
+    ) {
+        self.total_started += 1;
+        self.active.insert(
+            conversation_id.to_string(),
+            SubagentRun {
+                agent_name,
+                model,
+                last_message: None,
+                started_at: Instant::now(),
+                duration: None,
+            },
+        );
+    }
+
+    fn on_message(&mut self, conversation_id: &ConversationId, message: String) {
+        if let Some(run) = self.active.get_mut(&conversation_id.to_string()) {
+            run.last_message = Some(preview_text(&message));
+        }
+    }
+
+    fn status_summary(&self) -> Option<String> {
+        if self.active.is_empty() && self.total_completed == 0 && self.total_failed == 0 {
+            return None;
+        }
+        Some(format!(
+            "Subagents: {} active • {} done • {} failed",
+            self.active.len(),
+            self.total_completed,
+            self.total_failed,
+        ))
+    }
+
+    fn on_completed(
+        &mut self,
+        conversation_id: &ConversationId,
+        outcome: SubAgentOutcome,
+        error: Option<String>,
+        duration_ms: Option<u64>,
+    ) -> Option<SubagentRun> {
+        match outcome {
+            SubAgentOutcome::Success => self.total_completed += 1,
+            SubAgentOutcome::Error => self.total_failed += 1,
+        }
+        let key = conversation_id.to_string();
+        let mut run = self.active.remove(&key);
+        if let Some(existing) = run.as_mut() {
+            if let Some(ms) = duration_ms {
+                existing.duration = Some(Duration::from_millis(ms));
+            } else {
+                existing.duration =
+                    Some(Instant::now().saturating_duration_since(existing.started_at));
+            }
+        }
+        if let Some(err) = error {
+            if let Some(existing) = run.as_mut() {
+                existing.last_message = Some(preview_text(&err));
+            } else {
+                run = Some(SubagentRun {
+                    agent_name: key,
+                    model: None,
+                    last_message: Some(preview_text(&err)),
+                    started_at: Instant::now(),
+                    duration: duration_ms.map(Duration::from_millis),
+                });
+            }
+        }
+        run
+    }
+
+    fn summary_cell(&self) -> PlainHistoryCell {
+        let mut lines: Vec<Line> = vec![
+            "Subagent status".bold().into(),
+            vec!["  active: ".dim(), self.active.len().to_string().cyan()].into(),
+            vec!["  started: ".dim(), self.total_started.to_string().into()].into(),
+            vec![
+                "  completed: ".dim(),
+                self.total_completed.to_string().green(),
+            ]
+            .into(),
+            vec!["  failed: ".dim(), self.total_failed.to_string().red()].into(),
+        ];
+
+        if !self.active.is_empty() {
+            lines.push(Line::from(""));
+            let mut active_runs: Vec<&SubagentRun> = self.active.values().collect();
+            active_runs.sort_by(|a, b| a.agent_name.cmp(&b.agent_name));
+            for run in active_runs {
+                lines.push(vec!["  • ".into(), run.agent_name.clone().cyan().bold()].into());
+                if let Some(model) = run.model.clone() {
+                    lines.push(vec!["      model: ".dim(), model.into()].into());
+                    let elapsed = Instant::now().saturating_duration_since(run.started_at);
+                    lines.push(
+                        vec!["      elapsed: ".dim(), format_duration(elapsed).into()].into(),
+                    );
+                }
+                if let Some(summary) = run.last_message.as_ref() {
+                    lines.push(vec!["      last: ".dim(), summary.clone().into()].into());
+                }
+            }
+        }
+
+        PlainHistoryCell::new(lines.into_iter().collect())
+    }
+}
+
+fn preview_text(text: &str) -> String {
+    const MAX_PREVIEW_CHARS: usize = 80;
+    let single_line = text.replace('\n', " ");
+    let length = single_line.chars().count();
+    if length <= MAX_PREVIEW_CHARS {
+        return single_line;
+    }
+    single_line
+        .chars()
+        .take(MAX_PREVIEW_CHARS.saturating_sub(1))
+        .collect::<String>()
+        + "…"
+}
+
 enum Notification {
     AgentTurnComplete { response: String },
     ExecApprovalRequested { command: String },
@@ -2151,3 +2639,29 @@ pub(crate) fn show_review_commit_picker_with_entries(
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+fn format_duration(duration: Duration) -> String {
+    let ms = duration.as_millis().min(u128::from(u64::MAX)) as u64;
+    format_duration_ms(ms)
+}
+
+fn format_duration_ms(ms: u64) -> String {
+    if ms >= 60_000 {
+        let minutes = ms / 60_000;
+        let seconds = (ms % 60_000) / 1_000;
+        let millis = ms % 1_000;
+        if millis == 0 {
+            format!("{minutes}m {seconds:02}s")
+        } else {
+            format!("{minutes}m {seconds:02}.{millis:03}s")
+        }
+    } else if ms >= 1_000 {
+        if ms.is_multiple_of(1_000) {
+            format!("{}s", ms / 1_000)
+        } else {
+            format!("{:.1}s", (ms as f64) / 1_000.0)
+        }
+    } else {
+        format!("{ms}ms")
+    }
+}

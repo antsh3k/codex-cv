@@ -507,6 +507,8 @@ fn patch_apply_success_produces_item_completed_patchapply() {
             call_id: "call-1".to_string(),
             auto_approved: true,
             changes: changes.clone(),
+            origin_agent: None,
+            sub_conversation_id: None,
         }),
     );
     let out_begin = ep.collect_conversation_events(&begin);
@@ -520,6 +522,8 @@ fn patch_apply_success_produces_item_completed_patchapply() {
             stdout: "applied 3 changes".to_string(),
             stderr: String::new(),
             success: true,
+            origin_agent: None,
+            sub_conversation_id: None,
         }),
     );
     let out_end = ep.collect_conversation_events(&end);
@@ -576,6 +580,8 @@ fn patch_apply_failure_produces_item_completed_patchapply_failed() {
             call_id: "call-2".to_string(),
             auto_approved: false,
             changes: changes.clone(),
+            origin_agent: None,
+            sub_conversation_id: None,
         }),
     );
     assert!(ep.collect_conversation_events(&begin).is_empty());
@@ -588,6 +594,8 @@ fn patch_apply_failure_produces_item_completed_patchapply_failed() {
             stdout: String::new(),
             stderr: "failed to apply".to_string(),
             success: false,
+            origin_agent: None,
+            sub_conversation_id: None,
         }),
     );
     let out_end = ep.collect_conversation_events(&end);

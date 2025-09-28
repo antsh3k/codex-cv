@@ -7,6 +7,7 @@ use crate::codex::compact::content_items_to_text;
 use crate::codex::compact::is_session_prefix_message;
 use crate::codex_conversation::CodexConversation;
 use crate::config::Config;
+use crate::config::SubagentSettings;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::protocol::Event;
@@ -17,6 +18,7 @@ use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::RolloutItem;
+use codex_subagents::SubagentSpec;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -53,6 +55,39 @@ impl ConversationManager {
 
     pub async fn new_conversation(&self, config: Config) -> CodexResult<NewConversation> {
         self.spawn_conversation(config, self.auth_manager.clone())
+            .await
+    }
+
+    pub async fn spawn_subagent_conversation(
+        &self,
+        parent_config: &Config,
+        spec: &SubagentSpec,
+    ) -> CodexResult<NewConversation> {
+        let mut child_config = parent_config.clone();
+        if let Some(model) = spec.metadata.model.as_ref() {
+            child_config.model = model.clone();
+            child_config.review_model = model.clone();
+        }
+
+        apply_tool_policy_from_spec(&mut child_config, spec);
+
+        let merged_instructions = merge_subagent_instructions(
+            parent_config.base_instructions.as_deref(),
+            &spec.instructions,
+        );
+        child_config.base_instructions = Some(merged_instructions);
+        child_config.subagents = SubagentSettings {
+            enabled: false,
+            auto_route: false,
+            active_agent: Some(spec.metadata.name.clone()),
+            tool_allowlist: if spec.metadata.tools.is_empty() {
+                None
+            } else {
+                Some(spec.metadata.tools.clone())
+            },
+        };
+
+        self.spawn_conversation(child_config, self.auth_manager.clone())
             .await
     }
 
@@ -161,6 +196,47 @@ impl ConversationManager {
     }
 }
 
+fn merge_subagent_instructions(base: Option<&str>, agent_instructions: &str) -> String {
+    match base {
+        Some(existing) if !existing.trim().is_empty() => {
+            format!("{existing}\n\n{agent_instructions}")
+        }
+        _ => agent_instructions.to_string(),
+    }
+}
+
+fn apply_tool_policy_from_spec(config: &mut Config, spec: &SubagentSpec) {
+    if spec.metadata.tools.is_empty() {
+        return;
+    }
+    let allow = |name: &str| {
+        spec.metadata
+            .tools
+            .iter()
+            .any(|t| tool_name_matches(t, name))
+    };
+    config.include_apply_patch_tool = allow("apply_patch");
+    config.include_plan_tool = allow("plan") || allow("update_plan");
+    config.tools_web_search_request = allow("web_search");
+    config.include_view_image_tool = allow("view_image");
+    if !allow("local_shell") && !allow("exec") {
+        config.use_experimental_streamable_shell_tool = false;
+    }
+}
+
+fn tool_name_matches(entry: &str, candidate: &str) -> bool {
+    entry == candidate
+        || match entry {
+            "plan" => candidate == "plan" || candidate == "update_plan",
+            "update_plan" => candidate == "update_plan",
+            "apply_patch" => candidate == "apply_patch",
+            "web_search" => candidate == "web_search",
+            "view_image" => candidate == "view_image",
+            "local_shell" | "exec" => candidate == "local_shell" || candidate == "exec",
+            _ => false,
+        }
+}
+
 /// Return a prefix of `items` obtained by cutting strictly before the nth user message
 /// (0-based) and all items that follow it.
 fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> InitialHistory {
@@ -198,10 +274,15 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
 mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
+    use crate::config::Config;
+    use crate::config::ConfigOverrides;
+    use crate::config::ConfigToml;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemReasoningSummary;
     use codex_protocol::models::ResponseItem;
+    use codex_subagents::SubagentBuilder;
     use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
 
     fn user_msg(text: &str) -> ResponseItem {
         ResponseItem::Message {
@@ -302,5 +383,43 @@ mod tests {
             serde_json::to_value(&got_items).unwrap(),
             serde_json::to_value(&expected).unwrap()
         );
+    }
+    #[test]
+    fn merge_instructions_appends_agent_text() {
+        let merged = super::merge_subagent_instructions(Some("base"), "agent");
+        assert_eq!(merged, "base\n\nagent");
+
+        let merged_none = super::merge_subagent_instructions(None, "agent");
+        assert_eq!(merged_none, "agent");
+    }
+
+    #[test]
+    fn apply_tool_policy_respects_allowlist() {
+        let codex_home = tempdir().expect("tempdir");
+        let mut config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load config");
+
+        config.include_apply_patch_tool = false;
+        config.include_plan_tool = false;
+        config.tools_web_search_request = false;
+        config.include_view_image_tool = true;
+        config.use_experimental_streamable_shell_tool = true;
+
+        let spec = SubagentBuilder::new("tester")
+            .tools(["apply_patch", "plan", "web_search"])
+            .instructions("instr")
+            .build()
+            .expect("spec");
+
+        super::apply_tool_policy_from_spec(&mut config, &spec);
+
+        assert!(config.include_apply_patch_tool);
+        assert!(config.include_plan_tool);
+        assert!(config.tools_web_search_request);
+        assert!(!config.include_view_image_tool);
     }
 }

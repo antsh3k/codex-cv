@@ -184,6 +184,17 @@ pub enum ClientRequest {
         #[serde(rename = "id")]
         request_id: RequestId,
     },
+    #[serde(rename = "subagents/list")]
+    SubagentsList {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+    },
+    #[serde(rename = "subagents/run")]
+    SubagentsRun {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: SubagentsRunParams,
+    },
     /// Execute a command (argv vector) under the server's sandbox.
     ExecOneOffCommand {
         #[serde(rename = "id")]
@@ -422,6 +433,55 @@ pub struct GetAuthStatusResponse {
 #[serde(rename_all = "camelCase")]
 pub struct GetUserAgentResponse {
     pub user_agent: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentsRunParams {
+    pub conversation_id: ConversationId,
+    pub agent_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentsRunResponse {
+    pub sub_conversation_id: ConversationId,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentListAgent {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentParseError {
+    pub path: String,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentsListResponse {
+    pub agents: Vec<SubagentListAgent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parse_errors: Vec<SubagentParseError>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]

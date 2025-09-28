@@ -104,6 +104,7 @@ use crate::protocol::ReviewOutputEvent;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::StreamErrorEvent;
+use crate::protocol::SubAgentMessageEvent;
 use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
@@ -120,6 +121,7 @@ use crate::state::SessionServices;
 use crate::tasks::CompactTask;
 use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
+use crate::turn_diff_tracker::SequentialEditWarning;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::UserInstructions;
@@ -283,6 +285,8 @@ pub(crate) struct TurnContext {
     pub(crate) tools_config: ToolsConfig,
     pub(crate) is_review_mode: bool,
     pub(crate) final_output_json_schema: Option<Value>,
+    pub(crate) subagent_name: Option<String>,
+    pub(crate) subagent_tool_allowlist: Option<Vec<String>>,
 }
 
 impl TurnContext {
@@ -451,6 +455,8 @@ impl Session {
             cwd,
             is_review_mode: false,
             final_output_json_schema: None,
+            subagent_name: config.subagents.active_agent.clone(),
+            subagent_tool_allowlist: config.subagents.tool_allowlist.clone(),
         };
         let services = SessionServices {
             mcp_connection_manager,
@@ -552,6 +558,8 @@ impl Session {
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
+        origin_agent: Option<String>,
+        model: Option<String>,
     ) -> ReviewDecision {
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
@@ -577,6 +585,9 @@ impl Session {
                 command,
                 cwd,
                 reason,
+                origin_agent,
+                model,
+                sub_conversation_id: Some(*self.conversation_id()),
             }),
         };
         self.send_event(event).await;
@@ -590,6 +601,8 @@ impl Session {
         action: &ApplyPatchAction,
         reason: Option<String>,
         grant_root: Option<PathBuf>,
+        origin_agent: Option<String>,
+        model: Option<String>,
     ) -> oneshot::Receiver<ReviewDecision> {
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
@@ -614,6 +627,9 @@ impl Session {
                 call_id,
                 changes: convert_apply_patch_to_protocol(action),
                 reason,
+                origin_agent,
+                model,
+                sub_conversation_id: Some(*self.conversation_id()),
                 grant_root,
             }),
         };
@@ -804,18 +820,25 @@ impl Session {
             command_for_display,
             cwd,
             apply_patch,
+            origin_agent,
+            sub_conversation_id,
         } = exec_command_context;
         let msg = match apply_patch {
             Some(ApplyPatchCommandContext {
                 user_explicitly_approved_this_action,
                 changes,
             }) => {
-                turn_diff_tracker.on_patch_begin(&changes);
+                let warnings = turn_diff_tracker.on_patch_begin(&changes, origin_agent.as_deref());
+                for warning in warnings {
+                    self.notify_sequential_edit_warning(&sub_id, warning).await;
+                }
 
                 EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                     call_id,
                     auto_approved: !user_explicitly_approved_this_action,
                     changes,
+                    origin_agent: origin_agent.clone(),
+                    sub_conversation_id: Some(sub_conversation_id),
                 })
             }
             None => EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
@@ -842,6 +865,8 @@ impl Session {
         call_id: &str,
         output: &ExecToolCallOutput,
         is_apply_patch: bool,
+        origin_agent: Option<String>,
+        sub_conversation_id: &ConversationId,
     ) {
         let ExecToolCallOutput {
             stdout,
@@ -863,6 +888,8 @@ impl Session {
                 stdout,
                 stderr,
                 success: *exit_code == 0,
+                origin_agent: origin_agent.clone(),
+                sub_conversation_id: Some(*sub_conversation_id),
             })
         } else {
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
@@ -945,6 +972,8 @@ impl Session {
             &call_id,
             borrowed,
             is_apply_patch,
+            begin_ctx.origin_agent.clone(),
+            &begin_ctx.sub_conversation_id,
         )
         .await;
 
@@ -962,6 +991,28 @@ impl Session {
             }),
         };
         self.send_event(event).await;
+    }
+
+    async fn notify_sequential_edit_warning(&self, sub_id: &str, warning: SequentialEditWarning) {
+        let SequentialEditWarning {
+            path,
+            previous_agent,
+            current_agent,
+        } = warning;
+
+        let format_agent = |agent: Option<&str>| -> String {
+            agent
+                .map(|name| format!("subagent \"{name}\""))
+                .unwrap_or_else(|| "the main session".to_string())
+        };
+
+        let current_label = format_agent(current_agent.as_deref());
+        let previous_label = format_agent(previous_agent.as_deref());
+        let message = format!(
+            "{current_label} is editing `{}` which already has pending changes from {previous_label}. Codex will apply these patches sequentially; review the combined diff before accepting.",
+            path.display()
+        );
+        self.notify_background_event(sub_id, message).await;
     }
 
     async fn notify_stream_error(&self, sub_id: &str, message: impl Into<String>) {
@@ -1049,6 +1100,10 @@ impl Session {
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
     }
+
+    pub(crate) fn conversation_id(&self) -> &ConversationId {
+        &self.conversation_id
+    }
 }
 
 impl Drop for Session {
@@ -1064,6 +1119,8 @@ pub(crate) struct ExecCommandContext {
     pub(crate) command_for_display: Vec<String>,
     pub(crate) cwd: PathBuf,
     pub(crate) apply_patch: Option<ApplyPatchCommandContext>,
+    pub(crate) origin_agent: Option<String>,
+    pub(crate) sub_conversation_id: ConversationId,
 }
 
 #[derive(Clone, Debug)]
@@ -1158,6 +1215,8 @@ async fn submission_loop(
                     cwd: new_cwd.clone(),
                     is_review_mode: false,
                     final_output_json_schema: None,
+                    subagent_name: prev.subagent_name.clone(),
+                    subagent_tool_allowlist: prev.subagent_tool_allowlist.clone(),
                 };
 
                 // Install the new persistent context for subsequent tasks/turns.
@@ -1243,6 +1302,8 @@ async fn submission_loop(
                         cwd,
                         is_review_mode: false,
                         final_output_json_schema,
+                        subagent_name: turn_context.subagent_name.clone(),
+                        subagent_tool_allowlist: turn_context.subagent_tool_allowlist.clone(),
                     };
 
                     // if the environment context has changed, record it in the conversation history
@@ -1493,6 +1554,8 @@ async fn spawn_review_thread(
         cwd: parent_turn_context.cwd.clone(),
         is_review_mode: true,
         final_output_json_schema: None,
+        subagent_name: parent_turn_context.subagent_name.clone(),
+        subagent_tool_allowlist: parent_turn_context.subagent_tool_allowlist.clone(),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2110,6 +2173,62 @@ async fn try_run_turn(
     }
 }
 
+fn tool_name_matches(entry: &str, candidate: &str) -> bool {
+    if entry == candidate || entry == "*" {
+        return true;
+    }
+    match entry {
+        "plan" => candidate == "update_plan",
+        "local_shell" => candidate == "local_shell" || candidate == EXEC_COMMAND_TOOL_NAME,
+        "exec" => candidate == EXEC_COMMAND_TOOL_NAME,
+        _ => false,
+    }
+}
+
+fn tool_is_allowed(allowlist: Option<&Vec<String>>, candidate: &str) -> bool {
+    let Some(list) = allowlist else {
+        return true;
+    };
+    if list.is_empty() {
+        return false;
+    }
+    list.iter()
+        .any(|entry| entry == candidate || tool_name_matches(entry, candidate))
+}
+
+fn tool_denied_message(tool_name: &str, subagent_name: Option<&str>) -> String {
+    match subagent_name {
+        Some(agent) => {
+            format!("Tool `{tool_name}` is not allowed for subagent `{agent}`; denying request.")
+        }
+        None => format!("Tool `{tool_name}` is not allowed; denying request."),
+    }
+}
+
+async fn send_tool_denied_event(
+    sess: &Session,
+    sub_id: &str,
+    message: &str,
+    subagent_name: Option<&str>,
+) {
+    let msg = if let Some(agent) = subagent_name {
+        EventMsg::SubAgentMessage(SubAgentMessageEvent {
+            agent_name: agent.to_string(),
+            sub_conversation_id: *sess.conversation_id(),
+            message: message.to_string(),
+        })
+    } else {
+        EventMsg::Error(ErrorEvent {
+            message: message.to_string(),
+        })
+    };
+    let event = Event {
+        id: sub_id.to_string(),
+        msg,
+    };
+    sess.send_event(event).await;
+}
+
 async fn handle_response_item(
     sess: &Session,
     turn_context: &TurnContext,
@@ -2118,6 +2237,8 @@ async fn handle_response_item(
     item: ResponseItem,
 ) -> CodexResult<Option<ResponseInputItem>> {
     debug!(?item, "Output item");
+    let tool_allowlist = turn_context.subagent_tool_allowlist.as_ref();
+    let subagent_name = turn_context.subagent_name.as_deref();
     let output = match item {
         ResponseItem::FunctionCall {
             name,
@@ -2126,6 +2247,18 @@ async fn handle_response_item(
             ..
         } => {
             info!("FunctionCall: {name}({arguments})");
+            if !tool_is_allowed(tool_allowlist, name.as_str()) {
+                let message = tool_denied_message(name.as_str(), subagent_name);
+                send_tool_denied_event(sess, sub_id, &message, subagent_name).await;
+                let call_id_string = call_id.clone();
+                return Ok(Some(ResponseInputItem::FunctionCallOutput {
+                    call_id: call_id_string,
+                    output: FunctionCallOutputPayload {
+                        content: message,
+                        success: Some(false),
+                    },
+                }));
+            }
             if let Some((server, tool_name)) =
                 sess.services.mcp_connection_manager.parse_tool_name(&name)
             {
@@ -2170,6 +2303,18 @@ async fn handle_response_item(
             status: _,
             action,
         } => {
+            if !tool_is_allowed(tool_allowlist, "local_shell") {
+                let message = tool_denied_message("local_shell", subagent_name);
+                send_tool_denied_event(sess, sub_id, &message, subagent_name).await;
+                let effective_call_id = call_id.clone().or(id.clone()).unwrap_or_default();
+                return Ok(Some(ResponseInputItem::FunctionCallOutput {
+                    call_id: effective_call_id,
+                    output: FunctionCallOutputPayload {
+                        content: message,
+                        success: Some(false),
+                    },
+                }));
+            }
             let LocalShellAction::Exec(action) = action;
             tracing::info!("LocalShellCall: {action:?}");
             let params = ShellToolCallParams {
@@ -2658,6 +2803,8 @@ async fn handle_container_exec_with_params(
                     params.command.clone(),
                     params.cwd.clone(),
                     params.justification.clone(),
+                    turn_context.subagent_name.clone(),
+                    Some(turn_context.client.model_slug().to_string()),
                 )
                 .await;
             match decision {
@@ -2698,6 +2845,8 @@ async fn handle_container_exec_with_params(
                 changes: convert_apply_patch_to_protocol(&action),
             },
         ),
+        origin_agent: turn_context.subagent_name.clone(),
+        sub_conversation_id: *sess.conversation_id(),
     };
 
     let params = maybe_translate_shell_command(params, sess, turn_context);
@@ -2800,6 +2949,8 @@ async fn handle_sandbox_error(
             params.command.clone(),
             cwd.clone(),
             Some("command failed; retry without sandbox?".to_string()),
+            turn_context.subagent_name.clone(),
+            Some(turn_context.client.model_slug().to_string()),
         )
         .await;
 
@@ -3409,6 +3560,8 @@ mod tests {
             tools_config,
             is_review_mode: false,
             final_output_json_schema: None,
+            subagent_name: config.subagents.active_agent.clone(),
+            subagent_tool_allowlist: config.subagents.tool_allowlist.clone(),
         };
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
@@ -3476,6 +3629,8 @@ mod tests {
             tools_config,
             is_review_mode: false,
             final_output_json_schema: None,
+            subagent_name: config.subagents.active_agent.clone(),
+            subagent_tool_allowlist: config.subagents.tool_allowlist.clone(),
         });
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),

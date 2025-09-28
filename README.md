@@ -98,6 +98,98 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
 
 ---
 
+## Subagents (Design Overview)
+
+The Subagents feature lets Codex delegate specific tasks to lightweight, user‑defined agents described in Markdown files with YAML frontmatter. It is feature‑flagged and opt‑in by default so existing workflows remain unchanged.
+
+Key points below are chosen for simplicity, clarity, and ease of iteration.
+
+### Enablement & Discovery
+- Feature flag: `subagents.enabled = false` by default (can be overridden by `CODEX_SUBAGENTS_ENABLED=1`).
+- Auto‑routing: `subagents.auto_route = false` by default. When true, simple keyword heuristics may trigger a subagent automatically.
+- Discovery locations (project overrides user by name):
+  - Project: `<repo>/.codex/agents/*.md`
+  - User: `~/.codex/agents/*.md`
+- Registry caches by mtime hash and reloads when you run `/agents` (TUI) or `codex subagents list` (CLI).
+
+### Agent Spec Format
+Agent files are Markdown with YAML frontmatter. Minimal example:
+
+```markdown
+---
+name: reviewer
+description: Reviews diffs and flags style/security issues
+model: gpt-5-codex   # optional; falls back to session model if omitted
+tools: [apply_patch, local_shell]  # allowlist; empty means no tools
+keywords: [review, code review, lints]  # optional; used by auto_route heuristics
+---
+
+Detailed instructions for the reviewer agent go here in Markdown.
+```
+
+Fields:
+- `name` (string, required): unique per registry; project definitions override user ones when names collide.
+- `description` (string): short summary for listings.
+- `model` (string, optional): per‑agent model override. If invalid or missing, the session model is used.
+- `tools` (string[]; optional): strict allowlist of built‑in tools (e.g., `local_shell`, `apply_patch`, `view_image`). MCP tools can be referenced later using `mcp:<server>:<tool>`; initial implementation may focus on built‑ins for simplicity.
+- `keywords` (string[]; optional): phrases used by simple NL routing when `subagents.auto_route=true`.
+
+### Orchestration & Routing
+- Subagents run sequentially. The orchestrator creates an isolated sub‑conversation that inherits parent policies and cwd:
+  - Inherit: `approval_policy`, `sandbox_policy`, `cwd`.
+  - Override allowed: `model` (from agent spec) and tool allowlist (from agent spec).
+- Routing options:
+  - Slash: `/use <agent>` runs a named agent explicitly.
+  - Auto‑route (optional): string/keyword heuristics (e.g., "use the <name> agent" or presence of `keywords`) when `subagents.auto_route=true`. No model‑assisted intent in the MVP.
+
+### Protocol Events (new)
+Three new events are introduced and streamed like other `EventMsg` items:
+- `SubAgentStarted { agent_name, parent_submit_id, sub_conversation_id, model }`
+- `SubAgentMessage { agent_name, message }` (mirrors `AgentMessageEvent` but labels the agent)
+- `SubAgentCompleted { agent_name, outcome }` where `outcome` is `"success"` or `"error"`.
+
+Diff attribution: existing patch events gain optional origin metadata so UIs can label changes:
+- `PatchApplyBegin { ..., origin_agent?: string, sub_conversation_id?: string }`
+- `PatchApplyEnd { ..., origin_agent?: string, sub_conversation_id?: string }`
+
+These fields are optional to preserve backwards compatibility.
+
+### CLI/TUI Surface
+- TUI slash commands:
+  - `/agents` → list available subagents and parse errors
+  - `/use <name>` → run a specific subagent
+  - `/subagent-status` → show recent runs with status and durations
+- CLI subcommands:
+  - `codex subagents list` → prints discovered agents with source, model, and tools
+  - `codex subagents run <name> [-- prompt...]` → runs a specific subagent non‑interactively
+
+Notes:
+- `subagents run` streams standard Codex events; it returns immediately with `{ subConversationId }` and progress arrives via notifications.
+- The existing `codex exec` remains unchanged; a `--subagent <name>` flag may be added later if desired.
+
+### MCP Methods (optional, simple shape)
+- `subagents/list` → returns: `{ agents: Array<{ name, description?, model?, tools, source, parse_errors? }> }`
+- `subagents/run` → params: `{ conversationId, agentName, prompt? }` → result: `{ subConversationId }`, with progress via `codex/event` notifications using the new `SubAgent*` events.
+
+### Tool Policy & Safety
+- Enforcement is server‑side and strict: only tools in the agent `tools` allowlist are available during that subagent’s run. Unlisted tools (including local shell) are denied.
+- No sandbox changes beyond existing policies. Subagents inherit the parent `approval_policy` and `sandbox_policy` as‑is.
+
+### Telemetry
+- Piggyback on existing token usage and event stream: include agent labels in `SubAgentStarted/Completed` and compute per‑agent durations in the CLI/TUI. No new telemetry subsystem is introduced.
+
+### Macros & Crates
+- Derive macros live in a sibling proc‑macro crate to avoid cycles: `codex-subagents-derive` (e.g., `#[derive(Subagent)]`, `#[subagent(name = "...", model = "...")]`). The core implementation lives in `codex-subagents`.
+
+### Rollout & History
+- Subagent events are recorded in the rollout log with their `sub_conversation_id`. Resuming or forking preserves the parent transcript and labels sub‑segments clearly in UIs.
+
+### Errors & UX Messages
+- If subagents are disabled, surface a clear hint: "Subagents are disabled. Enable with `subagents.enabled = true` or set `CODEX_SUBAGENTS_ENABLED=1`."
+- If an agent is not found or has parse errors, `/agents` and `subagents list` display diagnostics and the orchestrator skips execution gracefully.
+
+This design keeps the MVP minimal while providing clear extension points (parallel execution, richer routing, MCP tool addressing, and advanced policies) without affecting current behavior.
+
 ## License
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).

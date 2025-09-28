@@ -4,6 +4,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::test_backend::VT100Backend;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
+use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
@@ -32,6 +33,10 @@ use codex_core::protocol::ReviewLineRange;
 use codex_core::protocol::ReviewOutputEvent;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
+use codex_core::protocol::SubAgentCompletedEvent;
+use codex_core::protocol::SubAgentMessageEvent;
+use codex_core::protocol::SubAgentOutcome;
+use codex_core::protocol::SubAgentStartedEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
 use codex_protocol::mcp_protocol::ConversationId;
@@ -40,11 +45,15 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
+use std::fs;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
+use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tempfile::NamedTempFile;
+use tempfile::tempdir;
 use tokio::sync::mpsc::unbounded_channel;
 
 fn test_config() -> Config {
@@ -313,6 +322,9 @@ fn make_chatwidget_manual() -> (
         disable_paste_burst: false,
     });
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let conversation_manager = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
+        "test",
+    )));
     let widget = ChatWidget {
         app_event_tx,
         codex_op_tx: op_tx,
@@ -333,6 +345,7 @@ fn make_chatwidget_manual() -> (
         full_reasoning_buffer: String::new(),
         conversation_id: None,
         frame_requester: FrameRequester::test_dummy(),
+        conversation_manager,
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
         suppress_session_configured_redraw: false,
@@ -341,6 +354,7 @@ fn make_chatwidget_manual() -> (
         ghost_snapshots: Vec::new(),
         ghost_snapshots_disabled: false,
         needs_final_message_separator: false,
+        subagent_stats: SubagentStats::default(),
     };
     (widget, rx, op_rx)
 }
@@ -416,6 +430,121 @@ fn rate_limit_warnings_emit_thresholds() {
 }
 
 #[test]
+fn subagent_events_render_in_history() {
+    let (mut widget, mut rx, _op_rx) = make_chatwidget_manual();
+    let conversation_id = ConversationId::default();
+
+    widget.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::SubAgentStarted(SubAgentStartedEvent {
+            agent_name: "tester".to_string(),
+            parent_submit_id: "cli".to_string(),
+            sub_conversation_id: conversation_id,
+            model: Some("gpt-5-codex".to_string()),
+        }),
+    });
+
+    widget.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::SubAgentMessage(SubAgentMessageEvent {
+            agent_name: "tester".to_string(),
+            sub_conversation_id: conversation_id,
+            message: "Work in progress".to_string(),
+        }),
+    });
+
+    widget.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::SubAgentCompleted(SubAgentCompletedEvent {
+            agent_name: "tester".to_string(),
+            sub_conversation_id: conversation_id,
+            outcome: SubAgentOutcome::Success,
+            error: None,
+            model: Some("gpt-5-codex".to_string()),
+            duration_ms: Some(1_234),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(cells.iter().any(|lines| {
+        let rendered = lines_to_single_string(lines);
+        rendered.contains("subagent tester started")
+    }));
+    assert!(cells.iter().any(|lines| {
+        let rendered = lines_to_single_string(lines);
+        rendered.contains("Work in progress")
+    }));
+    assert!(cells.iter().any(|lines| {
+        let rendered = lines_to_single_string(lines);
+        rendered.contains("subagent tester completed")
+    }));
+    assert!(cells.iter().any(|lines| {
+        let rendered = lines_to_single_string(lines);
+        rendered.contains("duration: 1.2s")
+    }));
+}
+
+fn write_agent(path: &Path, name: &str, description: &str, body: &str) {
+    fs::write(
+        path,
+        format!(
+            "---
+name: {name}
+description: {description}
+model: gpt-5-codex
+keywords: [test]
+---
+{body}
+"
+        ),
+    )
+    .expect("write agent file");
+}
+
+#[test]
+fn subagent_list_snapshot() {
+    let project_dir = tempdir().expect("project dir");
+    let codex_home = tempdir().expect("codex home");
+
+    let project_agents = project_dir.path().join(".codex/agents");
+    fs::create_dir_all(&project_agents).expect("agents dir");
+    let user_agents = codex_home.path().join("agents");
+    fs::create_dir_all(&user_agents).expect("user agents dir");
+
+    let user_writer = user_agents.join("writer.md");
+    write_agent(
+        user_writer.as_path(),
+        "writer",
+        "User writer",
+        "User instructions",
+    );
+    let project_writer = project_agents.join("writer.md");
+    write_agent(
+        project_writer.as_path(),
+        "writer",
+        "Project writer",
+        "Project instructions",
+    );
+    let broken = project_agents.join("broken.md");
+    fs::write(&broken, "this is not valid frontmatter").expect("broken agent");
+
+    let (mut widget, mut rx, _op_rx) = make_chatwidget_manual();
+    widget.config.cwd = project_dir.path().to_path_buf();
+    widget.config.codex_home = codex_home.path().to_path_buf();
+
+    widget.show_subagent_list();
+
+    let history = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(&history[0]);
+    let project_root = project_dir.path().to_str().unwrap();
+    let home_root = codex_home.path().to_str().unwrap();
+    let sanitized = rendered
+        .replace(project_root, "<project>")
+        .replace(home_root, "<home>");
+    assert_snapshot!("subagent_list_snapshot", sanitized);
+}
+
+#[test]
 fn test_rate_limit_warnings_monthly() {
     let mut state = RateLimitWarningState::default();
     let mut warnings: Vec<String> = Vec::new();
@@ -444,6 +573,9 @@ fn exec_approval_emits_proposed_command_and_decision_history() {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        origin_agent: None,
+        model: None,
+        sub_conversation_id: None,
     };
     chat.handle_codex_event(Event {
         id: "sub-short".into(),
@@ -482,6 +614,9 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        origin_agent: None,
+        model: None,
+        sub_conversation_id: None,
     };
     chat.handle_codex_event(Event {
         id: "sub-multi".into(),
@@ -512,6 +647,9 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
         command: vec!["bash".into(), "-lc".into(), long],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
+        origin_agent: None,
+        model: None,
+        sub_conversation_id: None,
     };
     chat.handle_codex_event(Event {
         id: "sub-long".into(),
@@ -1171,6 +1309,9 @@ fn approval_modal_exec_snapshot() {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        origin_agent: None,
+        model: None,
+        sub_conversation_id: None,
     };
     chat.handle_codex_event(Event {
         id: "sub-approve".into(),
@@ -1199,6 +1340,9 @@ fn approval_modal_exec_without_reason_snapshot() {
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
+        origin_agent: None,
+        model: None,
+        sub_conversation_id: None,
     };
     chat.handle_codex_event(Event {
         id: "sub-approve-noreason".into(),
@@ -1232,6 +1376,9 @@ fn approval_modal_patch_snapshot() {
         call_id: "call-approve-patch".into(),
         changes,
         reason: Some("The model wants to apply changes".into()),
+        origin_agent: None,
+        model: None,
+        sub_conversation_id: None,
         grant_root: Some(PathBuf::from("/tmp")),
     };
     chat.handle_codex_event(Event {
@@ -1400,6 +1547,9 @@ fn status_widget_and_approval_modal_snapshot() {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        origin_agent: None,
+        model: None,
+        sub_conversation_id: None,
     };
     chat.handle_codex_event(Event {
         id: "sub-approve-exec".into(),
@@ -1461,6 +1611,9 @@ fn apply_patch_events_emit_history_cells() {
         call_id: "c1".into(),
         changes,
         reason: None,
+        origin_agent: None,
+        model: None,
+        sub_conversation_id: None,
         grant_root: None,
     };
     chat.handle_codex_event(Event {
@@ -1487,6 +1640,8 @@ fn apply_patch_events_emit_history_cells() {
         call_id: "c1".into(),
         auto_approved: true,
         changes: changes2,
+        origin_agent: None,
+        sub_conversation_id: None,
     };
     chat.handle_codex_event(Event {
         id: "s1".into(),
@@ -1506,6 +1661,8 @@ fn apply_patch_events_emit_history_cells() {
         stdout: "ok\n".into(),
         stderr: String::new(),
         success: true,
+        origin_agent: None,
+        sub_conversation_id: None,
     };
     chat.handle_codex_event(Event {
         id: "s1".into(),
@@ -1535,6 +1692,9 @@ fn apply_patch_manual_approval_adjusts_header() {
             call_id: "c1".into(),
             changes: proposed_changes,
             reason: None,
+            origin_agent: None,
+            model: None,
+            sub_conversation_id: None,
             grant_root: None,
         }),
     });
@@ -1553,6 +1713,8 @@ fn apply_patch_manual_approval_adjusts_header() {
             call_id: "c1".into(),
             auto_approved: false,
             changes: apply_changes,
+            origin_agent: None,
+            sub_conversation_id: None,
         }),
     });
 
@@ -1582,6 +1744,9 @@ fn apply_patch_manual_flow_snapshot() {
             call_id: "c1".into(),
             changes: proposed_changes,
             reason: Some("Manual review required".into()),
+            origin_agent: None,
+            model: None,
+            sub_conversation_id: None,
             grant_root: None,
         }),
     });
@@ -1602,6 +1767,8 @@ fn apply_patch_manual_flow_snapshot() {
             call_id: "c1".into(),
             auto_approved: false,
             changes: apply_changes,
+            origin_agent: None,
+            sub_conversation_id: None,
         }),
     });
     let approved_lines = drain_insert_history(&mut rx)
@@ -1633,6 +1800,9 @@ fn apply_patch_approval_sends_op_with_submission_id() {
         call_id: "call-999".into(),
         changes,
         reason: None,
+        origin_agent: None,
+        model: None,
+        sub_conversation_id: None,
         grant_root: None,
     };
     chat.handle_codex_event(Event {
@@ -1675,6 +1845,9 @@ fn apply_patch_full_flow_integration_like() {
             call_id: "call-1".into(),
             changes,
             reason: None,
+            origin_agent: None,
+            model: None,
+            sub_conversation_id: None,
             grant_root: None,
         }),
     });
@@ -1718,6 +1891,8 @@ fn apply_patch_full_flow_integration_like() {
             call_id: "call-1".into(),
             auto_approved: false,
             changes: changes2,
+            origin_agent: None,
+            sub_conversation_id: None,
         }),
     });
     chat.handle_codex_event(Event {
@@ -1727,6 +1902,8 @@ fn apply_patch_full_flow_integration_like() {
             stdout: String::from("ok"),
             stderr: String::new(),
             success: true,
+            origin_agent: None,
+            sub_conversation_id: None,
         }),
     });
 }
@@ -1749,6 +1926,9 @@ fn apply_patch_untrusted_shows_approval_modal() {
             call_id: "call-1".into(),
             changes,
             reason: None,
+            origin_agent: None,
+            model: None,
+            sub_conversation_id: None,
             grant_root: None,
         }),
     });
@@ -1797,6 +1977,9 @@ fn apply_patch_request_shows_diff_summary() {
             call_id: "call-apply".into(),
             changes,
             reason: None,
+            origin_agent: None,
+            model: None,
+            sub_conversation_id: None,
             grant_root: None,
         }),
     });

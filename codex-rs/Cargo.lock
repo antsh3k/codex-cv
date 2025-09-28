@@ -695,6 +695,7 @@ dependencies = [
  "codex-protocol",
  "codex-protocol-ts",
  "codex-responses-api-proxy",
+ "codex-subagents",
  "codex-tui",
  "ctor 0.5.0",
  "libc",
@@ -737,6 +738,7 @@ dependencies = [
  "codex-mcp-client",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-subagents",
  "core_test_support",
  "dirs",
  "env-flags",
@@ -916,6 +918,7 @@ dependencies = [
  "codex-core",
  "codex-login",
  "codex-protocol",
+ "codex-subagents",
  "core_test_support",
  "mcp-types",
  "mcp_test_support",
@@ -1017,6 +1020,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-subagents"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "insta",
+ "once_cell",
+ "pretty_assertions",
+ "regex-lite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha1",
+ "tempfile",
+ "thiserror 2.0.16",
+ "time",
+ "tracing",
+]
+
+[[package]]
+name = "codex-subagents-derive"
+version = "0.0.0"
+dependencies = [
+ "codex-subagents",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.104",
+ "trybuild",
+]
+
+[[package]]
 name = "codex-tui"
 version = "0.0.0"
 dependencies = [
@@ -1035,6 +1069,7 @@ dependencies = [
  "codex-login",
  "codex-ollama",
  "codex-protocol",
+ "codex-subagents",
  "color-eyre",
  "crossterm",
  "diffy",
@@ -2110,6 +2145,12 @@ name = "gimli"
 version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07e28edb80900c19c28f1072f2e8aeca7fa06b23cd4169cefe1af5aa3260783f"
+
+[[package]]
+name = "glob"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "globset"
@@ -4389,6 +4430,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_yaml"
+version = "0.9.34+deprecated"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
+dependencies = [
+ "indexmap 2.10.0",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml",
+]
+
+[[package]]
 name = "serial2"
 version = "0.2.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4805,6 +4859,12 @@ dependencies = [
  "core-foundation-sys",
  "libc",
 ]
+
+[[package]]
+name = "target-triple"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ac9aa371f599d22256307c24a9d748c041e548cbf599f35d890f9d365361790"
 
 [[package]]
 name = "tempfile"
@@ -5323,6 +5383,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
+name = "trybuild"
+version = "1.0.111"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ded9fdb81f30a5708920310bfcd9ea7482ff9cba5f54601f7a19a877d5c2392"
+dependencies = [
+ "glob",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "target-triple",
+ "termcolor",
+ "toml",
+]
+
+[[package]]
 name = "ts-rs"
 version = "11.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5404,6 +5479,12 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
+
+[[package]]
+name = "unsafe-libyaml"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "untrusted"

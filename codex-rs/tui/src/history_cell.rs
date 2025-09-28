@@ -266,6 +266,7 @@ pub(crate) struct PatchHistoryCell {
     event_type: PatchEventType,
     changes: HashMap<PathBuf, FileChange>,
     cwd: PathBuf,
+    origin_agent: Option<String>,
 }
 
 impl HistoryCell for PatchHistoryCell {
@@ -275,6 +276,7 @@ impl HistoryCell for PatchHistoryCell {
             self.event_type.clone(),
             &self.cwd,
             width as usize,
+            self.origin_agent.as_deref(),
         )
     }
 }
@@ -991,11 +993,13 @@ pub(crate) fn new_patch_event(
     event_type: PatchEventType,
     changes: HashMap<PathBuf, FileChange>,
     cwd: &Path,
+    origin_agent: Option<String>,
 ) -> PatchHistoryCell {
     PatchHistoryCell {
         event_type,
         changes,
         cwd: cwd.to_path_buf(),
+        origin_agent,
     }
 }
 

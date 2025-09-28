@@ -114,6 +114,10 @@ impl ModelClient {
         })
     }
 
+    pub fn model_slug(&self) -> &str {
+        &self.config.model
+    }
+
     /// Dispatches to either the Responses or Chat implementation depending on
     /// the provider config.  Public callers always invoke `stream()` – the
     /// specialised helpers are private to avoid accidental misuse.

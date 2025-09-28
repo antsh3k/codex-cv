@@ -68,6 +68,8 @@ pub(crate) struct BottomPane {
     status: Option<StatusIndicatorWidget>,
     /// Queued user messages to show under the status indicator.
     queued_user_messages: Vec<String>,
+    /// Latest subagent summary displayed under the status header.
+    status_subagent_summary: Option<String>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -97,9 +99,10 @@ impl BottomPane {
             has_input_focus: params.has_input_focus,
             is_task_running: false,
             ctrl_c_quit_hint: false,
+            esc_backtrack_hint: false,
             status: None,
             queued_user_messages: Vec::new(),
-            esc_backtrack_hint: false,
+            status_subagent_summary: None,
         }
     }
 
@@ -326,13 +329,16 @@ impl BottomPane {
 
         if running {
             if self.status.is_none() {
-                self.status = Some(StatusIndicatorWidget::new(
+                let mut widget = StatusIndicatorWidget::new(
                     self.app_event_tx.clone(),
                     self.frame_requester.clone(),
-                ));
+                );
+                widget.set_subagent_summary(self.status_subagent_summary.clone());
+                self.status = Some(widget);
             }
             if let Some(status) = self.status.as_mut() {
                 status.set_queued_messages(self.queued_user_messages.clone());
+                status.set_subagent_summary(self.status_subagent_summary.clone());
             }
             self.request_redraw();
         } else {
@@ -352,6 +358,14 @@ impl BottomPane {
         self.queued_user_messages = queued.clone();
         if let Some(status) = self.status.as_mut() {
             status.set_queued_messages(queued);
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_subagent_summary(&mut self, summary: Option<String>) {
+        self.status_subagent_summary = summary.clone();
+        if let Some(status) = self.status.as_mut() {
+            status.set_subagent_summary(summary);
         }
         self.request_redraw();
     }
@@ -519,6 +533,8 @@ mod tests {
             id: "1".to_string(),
             command: vec!["echo".into(), "ok".into()],
             reason: None,
+            origin_agent: None,
+            model: None,
         }
     }
 

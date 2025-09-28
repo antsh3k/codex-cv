@@ -23,6 +23,7 @@ codex-apply-patch = { workspace = true }
 codex-file-search = { workspace = true }
 codex-mcp-client = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-subagents = { workspace = true }
 codex-protocol = { workspace = true }
 dirs = { workspace = true }
 env-flags = { workspace = true }

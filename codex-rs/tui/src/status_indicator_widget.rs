@@ -24,6 +24,7 @@ pub(crate) struct StatusIndicatorWidget {
     header: String,
     /// Queued user messages to display under the status line.
     queued_messages: Vec<String>,
+    subagent_summary: Option<String>,
 
     elapsed_running: Duration,
     last_resume_at: Instant,
@@ -54,6 +55,7 @@ impl StatusIndicatorWidget {
         Self {
             header: String::from("Working"),
             queued_messages: Vec::new(),
+            subagent_summary: None,
             elapsed_running: Duration::ZERO,
             last_resume_at: Instant::now(),
             is_paused: false,
@@ -68,6 +70,9 @@ impl StatusIndicatorWidget {
         // + optional ellipsis line per truncated message + 1 spacer line
         let inner_width = width.max(1) as usize;
         let mut total: u16 = 1; // status line
+        if self.subagent_summary.is_some() {
+            total = total.saturating_add(1);
+        }
         if !self.queued_messages.is_empty() {
             total = total.saturating_add(1); // blank line between status and queued messages
         }
@@ -99,6 +104,13 @@ impl StatusIndicatorWidget {
     pub(crate) fn update_header(&mut self, header: String) {
         if self.header != header {
             self.header = header;
+        }
+    }
+
+    pub(crate) fn set_subagent_summary(&mut self, summary: Option<String>) {
+        if self.subagent_summary != summary {
+            self.subagent_summary = summary;
+            self.frame_requester.schedule_frame();
         }
     }
 
@@ -172,6 +184,9 @@ impl WidgetRef for StatusIndicatorWidget {
         // Build lines: status, then queued messages, then spacer.
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from(spans));
+        if let Some(summary) = &self.subagent_summary {
+            lines.push(Line::from(format!(" ↳ {summary}").dim()));
+        }
         if !self.queued_messages.is_empty() {
             lines.push(Line::from(""));
         }
@@ -266,6 +281,23 @@ mod tests {
             .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
         insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn renders_with_subagent_summary() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
+        w.set_subagent_summary(Some("Subagents: 1 active • 0 done • 0 failed".to_string()));
+
+        assert_eq!(w.desired_height(80), 3);
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 4)).expect("terminal");
+        terminal
+            .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
+            .expect("draw");
+        let backend_debug = format!("{:?}", terminal.backend());
+        assert!(backend_debug.contains("Subagents: 1 active"));
     }
 
     #[test]
