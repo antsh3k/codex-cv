@@ -188,6 +188,175 @@ Notes:
 - `subagents run` streams standard Codex events; it returns immediately with `{ subConversationId }` and progress arrives via notifications.
 - The existing `codex exec` remains unchanged; a `--subagent <name>` flag may be added later if desired.
 
+### Quickstart: Local Ollama Subagent Pipeline
+The `codex-subagent` shim makes it easy to exercise subagents without toggling feature flags manually. The following walkthrough wires up an “AI Code Review Pipeline” that runs entirely on a local Ollama instance.
+
+#### 0. Prerequisites
+- `npm install -g @openai/codex` to install the CLI and the `codex-subagent` shim.
+- Stage the Rust binary under `codex-cli/vendor/<target-triple>/codex/codex` (see installation section above).
+- Ensure Ollama is running at `http://localhost:11434/v1`.
+- Create a project directory where you can add `.codex/agents/*.md`.
+
+#### 1. Pull local models (≈14 GB total)
+```bash
+ollama pull granite3-dense:2b      # security scanner (~2 GB)
+ollama pull stable-code:3b         # bug detector (~3 GB)
+ollama pull deepseek-coder:1.3b    # performance analyzer (~2 GB)
+ollama pull qwen2.5-coder:3b       # test writer (~3 GB)
+ollama pull codellama:7b           # code fixer (~4 GB)
+# Optional documentation pass
+# ollama pull phi3                 # docs reviewer (~2 GB)
+```
+
+#### 2. Define subagents
+Create `.codex/agents/` and add one Markdown file per agent.
+
+`security-scanner.md`
+```markdown
+---
+name: security-scanner
+description: Flags potential security issues before code merges
+model_config:
+  provider: oss
+  model: granite3-dense:2b
+  endpoint: http://localhost:11434/v1
+  parameters:
+    temperature: 0.1
+tools: []
+keywords: [security, vulnerabilities]
+---
+
+Audit the diff for authentication, authorization, secrets, and injection risks.
+Return a short report with severity and remediation suggestions. Mark "safe" if nothing needs attention.
+```
+
+`bug-detector.md`
+```markdown
+---
+name: bug-detector
+description: Hunts for logic bugs and edge cases
+model_config:
+  provider: oss
+  model: stable-code:3b
+  endpoint: http://localhost:11434/v1
+  parameters:
+    temperature: 0.15
+tools: []
+keywords: [bug, regression]
+---
+
+Read the change context and spot regressions, missing error handling, or broken invariants.
+Explain why each issue matters and how to fix it.
+```
+
+`perf-analyzer.md`
+```markdown
+---
+name: perf-analyzer
+description: Reviews patches for performance regressions
+model_config:
+  provider: oss
+  model: deepseek-coder:1.3b
+  endpoint: http://localhost:11434/v1
+  parameters:
+    temperature: 0.2
+tools: []
+keywords: [performance, latency]
+---
+
+Inspect for CPU, memory, or I/O costs. Highlight hot paths or scale concerns and suggest optimizations or benchmarks.
+```
+
+`test-writer.md`
+```markdown
+---
+name: test-writer
+description: Proposes regression tests for new behavior
+model_config:
+  provider: oss
+  model: qwen2.5-coder:3b
+  endpoint: http://localhost:11434/v1
+  parameters:
+    temperature: 0.25
+tools: []
+keywords: [tests, coverage]
+---
+
+Infer the key behaviors that should be validated. Produce skeleton tests (unit/integration) or outline manual steps to verify fixes.
+```
+
+`code-fixer.md`
+```markdown
+---
+name: code-fixer
+description: Generates patch suggestions for high-priority issues
+model_config:
+  provider: oss
+  model: codellama:7b
+  endpoint: http://localhost:11434/v1
+  parameters:
+    temperature: 0.2
+tools: [apply_patch]
+keywords: [fix, patch]
+---
+
+When upstream agents flag issues, draft concrete code patches or diff snippets. Keep changes minimal and explain the rationale.
+```
+
+Optional documentation reviewer (`docs-reviewer.md`):
+```markdown
+---
+name: docs-reviewer
+description: Improves inline documentation and release notes
+model_config:
+  provider: oss
+  model: phi3
+  endpoint: http://localhost:11434/v1
+  parameters:
+    temperature: 0.3
+tools: []
+keywords: [docs, comments]
+---
+
+Assess comments, README updates, or changelog entries. Ensure clarity, accuracy, and developer ergonomics.
+```
+
+#### 3. Verify discovery
+```bash
+codex-subagent list
+```
+You should see each agent listed with `source: project`. If nothing is found, double-check the `.codex/agents` path, YAML formatting, and filenames.
+
+#### 4. Run the pipeline
+```bash
+ISSUE_PROMPT="Review the new payment webhook handler in src/payments/webhook.rs"
+
+codex-subagent run security-scanner --prompt "$ISSUE_PROMPT"
+codex-subagent run bug-detector --prompt "$ISSUE_PROMPT"
+codex-subagent run perf-analyzer --prompt "$ISSUE_PROMPT"
+codex-subagent run test-writer --prompt "$ISSUE_PROMPT"
+codex-subagent run code-fixer --prompt "$ISSUE_PROMPT"
+# Optional documentation pass
+# codex-subagent run docs-reviewer --prompt "$ISSUE_PROMPT"
+```
+Each command streams standard Codex events; successes end with a duration summary.
+
+#### 5. Compare with the base CLI (optional)
+```bash
+CODEX_SUBAGENTS_ENABLED=1 codex subagents list
+CODEX_SUBAGENTS_ENABLED=1 codex subagents run security-scanner --prompt "$ISSUE_PROMPT"
+```
+Outputs should match the shimmed commands.
+
+#### 6. Clean up
+```bash
+rm -rf codex-cli/vendor
+npm uninstall -g @openai/codex   # optional
+```
+Keep `.codex/agents/` if you plan to reuse the pipeline; the registry reloads on demand.
+
+---
+
 ### MCP Methods (optional, simple shape)
 - `subagents/list` → returns: `{ agents: Array<{ name, description?, model?, tools, source, parse_errors? }> }`
 - `subagents/run` → params: `{ conversationId, agentName, prompt? }` → result: `{ subConversationId }`, with progress via `codex/event` notifications using the new `SubAgent*` events.
