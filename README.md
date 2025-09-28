@@ -191,6 +191,16 @@ Notes:
 ### Quickstart: Local Ollama Subagent Pipeline
 The `codex-subagent` shim makes it easy to exercise subagents without toggling feature flags manually. The following walkthrough wires up an “AI Code Review Pipeline” that runs entirely on a local Ollama instance.
 
+#### Local validation (until npm release)
+If you are testing an unpublished build from this repository, install it globally from the checkout so both entry points are available on your PATH:
+
+```bash
+cd codex-cli
+npm install -g .
+which codex
+which codex-subagent
+```
+
 #### 0. Prerequisites
 - `npm install -g @openai/codex` to install the CLI and the `codex-subagent` shim.
 - Stage the Rust binary under `codex-cli/vendor/<target-triple>/codex/codex` (see installation section above).
