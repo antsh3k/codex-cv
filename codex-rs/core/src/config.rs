@@ -991,7 +991,7 @@ impl Config {
         };
         let subagents_settings = SubagentSettings {
             enabled: env_subagents_enabled
-                .unwrap_or_else(|| subagents_cfg.enabled.unwrap_or(false)),
+                .unwrap_or_else(|| subagents_cfg.enabled.unwrap_or(true)),
             auto_route: subagents_cfg.auto_route.unwrap_or(false),
             active_agent: None,
             tool_allowlist: None,
