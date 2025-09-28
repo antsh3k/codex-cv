@@ -1,10 +1,10 @@
 
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install codex</code></p>
-
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 </br>
 </br>If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE</a>
 </br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a></p>
+
+<p align="center"><em>Hackathon build:</em> build from source to unlock the Subagents feature described below.</p>
 
 <p align="center">
   <img src="./.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
@@ -123,50 +123,37 @@ Savings compound across teams: a 10-person squad saves ~ $132K/year versus cloud
 
 
 ### Local Install & Startup (5 minutes)
-1. Clone this repo and install the CLI shim: `git clone https://github.com/openai/codex.git && cd codex-cv && npm install -g @openai/codex`.
-2. Build the latest binaries: `cargo build -p codex-cli --release` followed by `cargo build -p codex-subagents --release` to ensure feature parity.
-3. Enable subagents and explore: set `CODEX_SUBAGENTS_ENABLED=1`, run `codex subagents list`, then try `codex subagents run reviewer --prompt "Audit the new subagent orchestrator"`.
+1. Clone this repo and enter the workspace: `git clone https://github.com/openai/codex.git && cd codex-cv`.
+2. Build the hackathon binary: `cargo build -p codex-cli --release` (this compiles the new Subagents support).
+3. Enable Subagents and explore with the local build: set `CODEX_SUBAGENTS_ENABLED=1`, run `./codex-rs/target/release/codex subagents list`, then try `./codex-rs/target/release/codex subagents run reviewer --prompt "Audit the new subagent orchestrator"`.
 4. Customize on-site: add Markdown specs under `.codex/agents/` (see examples below) and share them with hackathon teammates for instant reuse.
 
 ---
 
-## Quickstart
+## Local Build Quickstart
 
-### Installing and running Codex CLI
+### Build and run the hackathon Subagents build
 
-Install globally with your preferred package manager. If you use npm:
+The Subagents capability showcased for CEREBRAL VALLEY × OPENAI ships ahead of the standard installers, so pull and build from source:
 
-```shell
-npm install -g @openai/codex
+```bash
+git clone https://github.com/openai/codex.git
+cd codex-cv
+cargo build -p codex-cli --release
 ```
 
-Alternatively, if you use Homebrew:
+That produces `./codex-rs/target/release/codex`. Run it directly (or symlink it into your PATH) to explore the new capabilities:
 
-```shell
-brew install codex
+```bash
+CODEX_SUBAGENTS_ENABLED=1 ./codex-rs/target/release/codex subagents list
+CODEX_SUBAGENTS_ENABLED=1 ./codex-rs/target/release/codex subagents run reviewer --prompt "Audit the new subagent orchestrator"
 ```
 
-Then simply run `codex` to get started:
+If you prefer not to manage PATH entries manually, `cargo run --release -p codex-cli -- …` works for any command:
 
-```shell
-codex
+```bash
+cargo run --release -p codex-cli -- subagents run reviewer --prompt "Check the payments webhook"
 ```
-
-<details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
-
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
-
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
-
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
-
-</details>
 
 ### Using Codex with your ChatGPT plan
 
@@ -325,8 +312,8 @@ which codex-subagent
 This rebuild uses the local workspace code inside `codex-rs`. Cargo will only use cached crates from crates.io; if you need a completely offline run, prime the cache once with `cargo fetch` while online and then repeat the build with `CARGO_NET_OFFLINE=1`.
 
 #### 0. Prerequisites
-- `npm install -g @openai/codex` to install the CLI and the `codex-subagent` shim.
-- Stage the Rust binary under `codex-cli/vendor/<target-triple>/codex/codex` (see installation section above).
+- Build the Rust binary and stage it under `codex-cli/vendor/<target-triple>/codex/codex` (see installation section above).
+- Optionally run `(cd codex-cli && npm install -g .)` to expose the CLI shim (`codex` and `codex-subagent`) on your PATH.
 - Ensure Ollama is running at `http://localhost:11434/v1`.
 - Create a project directory where you can add `.codex/agents/*.md`.
 
