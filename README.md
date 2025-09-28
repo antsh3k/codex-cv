@@ -1,4 +1,3 @@
-
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 </br>
 </br>If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE</a>
@@ -10,104 +9,18 @@
   <img src="./.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
   </p>
 
----
+## 🤖 Subagents in Action
 
-<<<<<<< HEAD
-## Local Development Setup
+<p align="center">
+  <img src="./.github/codex-subagents-demo.png" alt="Codex Subagents Demo" width="90%" />
+  <br />
+  <em>Live demonstration: The <code>docs-reviewer</code> subagent analyzing README.md files with specialized feedback</em>
+</p>
 
-### Prerequisites
-
-1. **Node.js 22+** and **pnpm 10.8.1+**:
-   ```shell
-   # Install pnpm if you don't have it
-   npm install -g pnpm@10.8.1
-   ```
-
-2. **Rust toolchain**:
-   ```shell
-   # Install Rust via rustup
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   ```
-
-3. **Just command runner** (recommended):
-   ```shell
-   cargo install just
-   ```
-
-### Step-by-Step Setup
-
-1. **Clone and install dependencies**:
-   ```shell
-   git clone https://github.com/antsh3k/codex-cv.git
-   cd codex-cv
-   pnpm install
-   ```
-
-2. **Build and run Codex**:
-   ```shell
-   cd codex-rs
-   just codex
-   ```
-
-3. **Enable the new Subagent feature** (optional but recommended):
-   ```shell
-   # Set environment variable to enable subagents
-   export CODEX_SUBAGENTS_ENABLED=true
-
-   # Then run Codex with subagents enabled
-   just codex
-   ```
-
-### Using Subagents
-
-Once you have subagents enabled, you can:
-
-1. **List available subagents**:
-   ```shell
-   cd codex-rs
-   CODEX_SUBAGENTS_ENABLED=true cargo run --bin codex -- subagents list
-   ```
-
-2. **Run a specific subagent**:
-   ```shell
-   cd codex-rs
-   CODEX_SUBAGENTS_ENABLED=true cargo run --bin codex -- subagents run code-reviewer --prompt "Review this code for issues"
-   ```
-
-3. **Use subagents in interactive mode**:
-   - Start Codex: `CODEX_SUBAGENTS_ENABLED=true just codex`
-   - Use slash commands: `/agents`, `/use <agent-name>`
-
-### Development Commands
-
-- **Format code**: `just fmt`
-- **Run tests**: `just test`
-- **Run linting**: `just fix`
-- **TUI mode**: `just tui`
+The screenshot above shows Codex's **Subagents** feature running locally - specialized AI agents that handle targeted tasks like code review, security scanning, and documentation improvement. Each subagent runs with its own model and tools, providing focused expertise while keeping all processing local and secure.
 
 ---
 
-## Production Installation
-
-For regular usage (not development), install globally:
-
-**Using npm**:
-```shell
-npm install -g @openai/codex
-```
-
-**Using Homebrew**:
-```shell
-brew install codex
-```
-
-**Using pre-built binaries**:
-Download from [GitHub Releases](https://github.com/antsh3k/codex-cv/releases/latest):
-- macOS: `codex-aarch64-apple-darwin.tar.gz` (Apple Silicon) or `codex-x86_64-apple-darwin.tar.gz` (Intel)
-- Linux: `codex-x86_64-unknown-linux-musl.tar.gz` or `codex-aarch64-unknown-linux-musl.tar.gz`
-
-### Authentication
-=======
 ## CEREBRAL VALLEY × OPENAI Hackathon — Subagents Launch (September 28, 2025)
 
 Subagents are the centerpiece of our hackathon submission for the CEREBRAL VALLEY × OPENAI event on September 28, 2025. They let Codex delegate targeted tasks to purpose-built copilots that live alongside your codebase so on-call engineers, reviewers, and operators get AI superpowers without leaving the CLI.
@@ -217,13 +130,6 @@ Savings compound across teams: a 10-person squad saves ~ $132K/year versus cloud
 - **Budget-conscious teams**: startups and OSS maintainers who need predictable costs.
 - **Education & hackathons**: classrooms and meetups with constrained Wi-Fi but plenty of laptops.
 
-
-### Local Install & Startup (5 minutes)
-1. Clone this repo and enter the workspace: `git clone https://github.com/openai/codex.git && cd codex-cv`.
-2. Build the hackathon binary: `cargo build -p codex-cli --release` (this compiles the new Subagents support).
-3. Enable Subagents and explore with the local build: set `CODEX_SUBAGENTS_ENABLED=1`, run `./codex-rs/target/release/codex subagents list`, then try `./codex-rs/target/release/codex subagents run reviewer --prompt "Audit the new subagent orchestrator"`.
-4. Customize on-site: add Markdown specs under `.codex/agents/` (see examples below) and share them with hackathon teammates for instant reuse.
-
 ---
 
 ## Local Build Quickstart
@@ -251,8 +157,28 @@ If you prefer not to manage PATH entries manually, `cargo run --release -p codex
 cargo run --release -p codex-cli -- subagents run reviewer --prompt "Check the payments webhook"
 ```
 
-### Using Codex with your ChatGPT plan
->>>>>>> 35d08ddd69c1a17602ac2596d1da70d82811cf0d
+---
+
+## Production Installation
+
+For regular usage (not development), install globally:
+
+**Using npm**:
+```shell
+npm install -g @openai/codex
+```
+
+**Using Homebrew**:
+```shell
+brew install codex
+```
+
+**Using pre-built binaries**:
+Download from [GitHub Releases](https://github.com/antsh3k/codex-cv/releases/latest):
+- macOS: `codex-aarch64-apple-darwin.tar.gz` (Apple Silicon) or `codex-x86_64-apple-darwin.tar.gz` (Intel)
+- Linux: `codex-x86_64-unknown-linux-musl.tar.gz` or `codex-aarch64-unknown-linux-musl.tar.gz`
+
+### Authentication
 
 <p align="center">
   <img src="./.github/codex-cli-login.png" alt="Codex CLI login" width="80%" />
@@ -265,7 +191,6 @@ You can also use Codex with an API key, but this requires [additional setup](./d
 ### Model Context Protocol (MCP)
 
 Codex CLI supports [MCP servers](./docs/advanced.md#model-context-protocol-mcp). Enable by adding an `mcp_servers` section to your `~/.codex/config.toml`.
-
 
 ### Configuration
 
@@ -391,7 +316,7 @@ Notes:
 - The existing `codex exec` remains unchanged; a `--subagent <name>` flag may be added later if desired.
 
 ### Quickstart: Local Ollama Subagent Pipeline
-The `codex-subagent` shim makes it easy to exercise subagents without toggling feature flags manually. The following walkthrough wires up an “AI Code Review Pipeline” that runs entirely on a local Ollama instance.
+The `codex-subagent` shim makes it easy to exercise subagents without toggling feature flags manually. The following walkthrough wires up an "AI Code Review Pipeline" that runs entirely on a local Ollama instance.
 
 #### Local validation (until npm release)
 If you are testing an unpublished build from this repository, install it globally from the checkout so both entry points are available on your PATH:
@@ -414,15 +339,15 @@ This rebuild uses the local workspace code inside `codex-rs`. Cargo will only us
 - Ensure Ollama is running at `http://localhost:11434/v1`.
 - Create a project directory where you can add `.codex/agents/*.md`.
 
-#### 1. Pull local models (≈14 GB total)
+#### 1. Pull local models (≈14 GB total)
 ```bash
-ollama pull granite3-dense:2b      # security scanner (~2 GB)
-ollama pull stable-code:3b         # bug detector (~3 GB)
-ollama pull deepseek-coder:1.3b    # performance analyzer (~2 GB)
-ollama pull qwen2.5-coder:3b       # test writer (~3 GB)
-ollama pull codellama:7b           # code fixer (~4 GB)
+ollama pull granite3-dense:2b      # security scanner (~2 GB)
+ollama pull stable-code:3b         # bug detector (~3 GB)
+ollama pull deepseek-coder:1.3b    # performance analyzer (~2 GB)
+ollama pull qwen2.5-coder:3b       # test writer (~3 GB)
+ollama pull codellama:7b           # code fixer (~4 GB)
 # Optional documentation pass
-# ollama pull phi3                 # docs reviewer (~2 GB)
+# ollama pull phi3                 # docs reviewer (~2 GB)
 ```
 
 #### 2. Define subagents
@@ -579,7 +504,7 @@ Keep `.codex/agents/` if you plan to reuse the pipeline; the registry reloads on
 - `subagents/run` → params: `{ conversationId, agentName, prompt? }` → result: `{ subConversationId }`, with progress via `codex/event` notifications using the new `SubAgent*` events.
 
 ### Tool Policy & Safety
-- Enforcement is server‑side and strict: only tools in the agent `tools` allowlist are available during that subagent’s run. Unlisted tools (including local shell) are denied.
+- Enforcement is server‑side and strict: only tools in the agent `tools` allowlist are available during that subagent's run. Unlisted tools (including local shell) are denied.
 - No sandbox changes beyond existing policies. Subagents inherit the parent `approval_policy` and `sandbox_policy` as‑is.
 
 ### Telemetry
