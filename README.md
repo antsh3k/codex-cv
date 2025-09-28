@@ -12,6 +12,102 @@
 
 ---
 
+<<<<<<< HEAD
+## Local Development Setup
+
+### Prerequisites
+
+1. **Node.js 22+** and **pnpm 10.8.1+**:
+   ```shell
+   # Install pnpm if you don't have it
+   npm install -g pnpm@10.8.1
+   ```
+
+2. **Rust toolchain**:
+   ```shell
+   # Install Rust via rustup
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
+
+3. **Just command runner** (recommended):
+   ```shell
+   cargo install just
+   ```
+
+### Step-by-Step Setup
+
+1. **Clone and install dependencies**:
+   ```shell
+   git clone https://github.com/antsh3k/codex-cv.git
+   cd codex-cv
+   pnpm install
+   ```
+
+2. **Build and run Codex**:
+   ```shell
+   cd codex-rs
+   just codex
+   ```
+
+3. **Enable the new Subagent feature** (optional but recommended):
+   ```shell
+   # Set environment variable to enable subagents
+   export CODEX_SUBAGENTS_ENABLED=true
+
+   # Then run Codex with subagents enabled
+   just codex
+   ```
+
+### Using Subagents
+
+Once you have subagents enabled, you can:
+
+1. **List available subagents**:
+   ```shell
+   cd codex-rs
+   CODEX_SUBAGENTS_ENABLED=true cargo run --bin codex -- subagents list
+   ```
+
+2. **Run a specific subagent**:
+   ```shell
+   cd codex-rs
+   CODEX_SUBAGENTS_ENABLED=true cargo run --bin codex -- subagents run code-reviewer --prompt "Review this code for issues"
+   ```
+
+3. **Use subagents in interactive mode**:
+   - Start Codex: `CODEX_SUBAGENTS_ENABLED=true just codex`
+   - Use slash commands: `/agents`, `/use <agent-name>`
+
+### Development Commands
+
+- **Format code**: `just fmt`
+- **Run tests**: `just test`
+- **Run linting**: `just fix`
+- **TUI mode**: `just tui`
+
+---
+
+## Production Installation
+
+For regular usage (not development), install globally:
+
+**Using npm**:
+```shell
+npm install -g @openai/codex
+```
+
+**Using Homebrew**:
+```shell
+brew install codex
+```
+
+**Using pre-built binaries**:
+Download from [GitHub Releases](https://github.com/antsh3k/codex-cv/releases/latest):
+- macOS: `codex-aarch64-apple-darwin.tar.gz` (Apple Silicon) or `codex-x86_64-apple-darwin.tar.gz` (Intel)
+- Linux: `codex-x86_64-unknown-linux-musl.tar.gz` or `codex-aarch64-unknown-linux-musl.tar.gz`
+
+### Authentication
+=======
 ## CEREBRAL VALLEY × OPENAI Hackathon — Subagents Launch (September 28, 2025)
 
 Subagents are the centerpiece of our hackathon submission for the CEREBRAL VALLEY × OPENAI event on September 28, 2025. They let Codex delegate targeted tasks to purpose-built copilots that live alongside your codebase so on-call engineers, reviewers, and operators get AI superpowers without leaving the CLI.
@@ -156,6 +252,7 @@ cargo run --release -p codex-cli -- subagents run reviewer --prompt "Check the p
 ```
 
 ### Using Codex with your ChatGPT plan
+>>>>>>> 35d08ddd69c1a17602ac2596d1da70d82811cf0d
 
 <p align="center">
   <img src="./.github/codex-cli-login.png" alt="Codex CLI login" width="80%" />
@@ -163,7 +260,7 @@ cargo run --release -p codex-cli -- subagents run reviewer --prompt "Check the p
 
 Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codex as part of your Plus, Pro, Team, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
 
-You can also use Codex with an API key, but this requires [additional setup](./docs/authentication.md#usage-based-billing-alternative-use-an-openai-api-key). If you previously used an API key for usage-based billing, see the [migration steps](./docs/authentication.md#migrating-from-usage-based-billing-api-key). If you're having trouble with login, please comment on [this issue](https://github.com/openai/codex/issues/1243).
+You can also use Codex with an API key, but this requires [additional setup](./docs/authentication.md#usage-based-billing-alternative-use-an-openai-api-key). If you previously used an API key for usage-based billing, see the [migration steps](./docs/authentication.md#migrating-from-usage-based-billing-api-key). If you're having trouble with login, please comment on [this issue](https://github.com/antsh3k/codex-cv/issues/1243).
 
 ### Model Context Protocol (MCP)
 
