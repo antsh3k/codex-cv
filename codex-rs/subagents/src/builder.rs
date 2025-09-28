@@ -1,10 +1,12 @@
 use crate::error::SubagentValidationError;
 use crate::parser::validate_agent_name;
 use crate::spec::AgentSource;
+use crate::spec::ModelBinding;
 use crate::spec::SubagentMetadata;
 use crate::spec::SubagentSpec;
 use sha1::Digest;
 use sha1::Sha1;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Debug)]
@@ -12,6 +14,7 @@ pub struct SubagentBuilder {
     name: Option<String>,
     description: Option<String>,
     model: Option<String>,
+    model_config: Option<ModelBinding>,
     tools: Vec<String>,
     keywords: Vec<String>,
     instructions: Option<String>,
@@ -25,6 +28,7 @@ impl Default for SubagentBuilder {
             name: None,
             description: None,
             model: None,
+            model_config: None,
             tools: Vec::new(),
             keywords: Vec::new(),
             instructions: None,
@@ -40,6 +44,7 @@ impl SubagentBuilder {
             name: Some(name.into()),
             description: None,
             model: None,
+            model_config: None,
             tools: Vec::new(),
             keywords: Vec::new(),
             instructions: None,
@@ -55,6 +60,11 @@ impl SubagentBuilder {
 
     pub fn model(mut self, model: impl Into<Option<String>>) -> Self {
         self.model = model.into();
+        self
+    }
+
+    pub fn model_config(mut self, config: impl Into<Option<ModelBinding>>) -> Self {
+        self.model_config = config.into();
         self
     }
 
@@ -104,9 +114,30 @@ impl SubagentBuilder {
         let tools = normalize_unique(self.tools, false)?;
         let keywords = normalize_unique(self.keywords, true)?;
 
+        let mut model_config = self.model_config;
+        if let Some(binding) = model_config.as_mut() {
+            if binding.model.is_none() {
+                binding.model = self.model.clone();
+            }
+        } else if self.model.is_some() {
+            model_config = Some(ModelBinding {
+                provider_id: None,
+                model: self.model.clone(),
+                endpoint: None,
+                parameters: BTreeMap::new(),
+            });
+        }
+
+        let display_model = self.model.clone().or_else(|| {
+            model_config
+                .as_ref()
+                .and_then(|binding| binding.model.clone())
+        });
+
         let metadata = SubagentMetadata::new(name.clone())
             .description(self.description)
-            .model(self.model)
+            .model(display_model)
+            .model_config(model_config.clone())
             .tools(tools)
             .keywords(keywords);
 
@@ -115,6 +146,23 @@ impl SubagentBuilder {
         hasher.update(instructions.as_bytes());
         if let Some(model) = metadata.model.as_deref() {
             hasher.update(model.as_bytes());
+        }
+        if let Some(config) = metadata.model_config.as_ref() {
+            if let Some(provider_id) = config.provider_id.as_ref() {
+                hasher.update(provider_id.as_bytes());
+            }
+            if let Some(endpoint) = config.endpoint.as_ref() {
+                hasher.update(endpoint.as_bytes());
+            }
+            if let Some(model) = config.model.as_ref() {
+                hasher.update(model.as_bytes());
+            }
+            for (key, value) in &config.parameters {
+                hasher.update(key.as_bytes());
+                if let Ok(serialized) = serde_json::to_vec(value) {
+                    hasher.update(&serialized);
+                }
+            }
         }
         for tool in &metadata.tools {
             hasher.update(tool.as_bytes());

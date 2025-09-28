@@ -2,10 +2,13 @@ use crate::builder::SubagentBuilder;
 use crate::error::ParserError;
 use crate::error::SubagentValidationError;
 use crate::spec::AgentSource;
+use crate::spec::ModelBinding;
 use crate::spec::SubagentSpec;
 use once_cell::sync::Lazy;
 use regex_lite::Regex;
 use serde::Deserialize;
+use serde_json::Value as JsonValue;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -20,8 +23,19 @@ struct Frontmatter {
     name: Option<String>,
     description: Option<String>,
     model: Option<String>,
+    #[serde(default)]
+    model_config: Option<FrontmatterModelConfig>,
     tools: Option<Vec<String>>,
     keywords: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FrontmatterModelConfig {
+    provider: Option<String>,
+    model: Option<String>,
+    endpoint: Option<String>,
+    #[serde(default)]
+    parameters: BTreeMap<String, JsonValue>,
 }
 
 const FRONTMATTER_DELIM: &str = "---";
@@ -50,9 +64,21 @@ pub fn parse_agent_str(
         return Err(SubagentValidationError::MissingField("instructions").into());
     }
 
+    let simple_model = normalize_optional_string(frontmatter.model);
+    let model_binding = match frontmatter.model_config {
+        Some(cfg) => Some(parse_model_config(cfg, &simple_model)?),
+        None => simple_model.clone().map(|model| ModelBinding {
+            provider_id: None,
+            model: Some(model),
+            endpoint: None,
+            parameters: BTreeMap::new(),
+        }),
+    };
+
     let mut builder = SubagentBuilder::new(name)
         .description(frontmatter.description)
-        .model(frontmatter.model)
+        .model(simple_model.clone())
+        .model_config(model_binding)
         .source(source)
         .source_path(path.to_path_buf())
         .instructions(instructions);
@@ -68,6 +94,77 @@ pub fn parse_agent_str(
     let warnings = Vec::new();
 
     Ok(ParsedAgent { spec, warnings })
+}
+
+fn parse_model_config(
+    raw: FrontmatterModelConfig,
+    simple_model: &Option<String>,
+) -> Result<ModelBinding, ParserError> {
+    let provider_id = raw
+        .provider
+        .map(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Err(SubagentValidationError::InvalidModelProvider)
+            } else {
+                Ok(trimmed.to_string())
+            }
+        })
+        .transpose()?;
+
+    let endpoint = raw
+        .endpoint
+        .map(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Err(SubagentValidationError::InvalidModelEndpoint)
+            } else {
+                Ok(trimmed.to_string())
+            }
+        })
+        .transpose()?;
+
+    let mut parameters = BTreeMap::new();
+    for (key, value) in raw.parameters.into_iter() {
+        if key.trim().is_empty() {
+            return Err(SubagentValidationError::InvalidModelParameterKey.into());
+        }
+        parameters.insert(key.trim().to_string(), value);
+    }
+
+    let mut binding = ModelBinding {
+        provider_id,
+        model: normalize_optional_string(raw.model),
+        endpoint,
+        parameters,
+    };
+
+    if let Some(model) = simple_model.as_ref() {
+        if let Some(binding_model) = binding.model.as_ref() {
+            if binding_model != model {
+                return Err(SubagentValidationError::ConflictingModelDefinitions {
+                    model: model.clone(),
+                    model_config: binding_model.clone(),
+                }
+                .into());
+            }
+        } else {
+            binding.model = Some(model.clone());
+        }
+    }
+
+    Ok(binding)
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 pub fn validate_agent_name(name: &str) -> Result<(), SubagentValidationError> {
@@ -119,6 +216,7 @@ fn split_frontmatter(contents: &str) -> Result<(&str, &str), ParserError> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use std::path::Path;
 
     #[test]
@@ -128,5 +226,65 @@ mod tests {
         assert_eq!(parsed.spec.metadata.name, "reviewer");
         assert_eq!(parsed.spec.instructions, "Body text here.");
         assert_eq!(parsed.spec.metadata.tools, vec!["apply_patch"]);
+        assert_eq!(parsed.spec.metadata.model.as_deref(), None);
+        assert!(parsed.spec.metadata.model_config.is_none());
+    }
+
+    #[test]
+    fn parses_structured_model_config() {
+        let doc = r"---
+name: code-reviewer
+model: gpt-4o
+model_config:
+  provider: openai
+  endpoint: https://proxy.mycompany.dev/v1
+  parameters:
+    temperature: 0.1
+---
+Follow the usual review checklist.";
+
+        let parsed =
+            parse_agent_str(doc, Path::new("code-reviewer.md"), AgentSource::Project).unwrap();
+        let metadata = &parsed.spec.metadata;
+        assert_eq!(metadata.model.as_deref(), Some("gpt-4o"));
+        let binding = metadata.model_config.as_ref().expect("binding");
+        assert_eq!(binding.provider_id.as_deref(), Some("openai"));
+        assert_eq!(binding.model.as_deref(), Some("gpt-4o"));
+        assert_eq!(
+            binding.endpoint.as_deref(),
+            Some("https://proxy.mycompany.dev/v1")
+        );
+        assert_eq!(binding.parameters.get("temperature"), Some(&json!(0.1)));
+    }
+
+    #[test]
+    fn rejects_conflicting_models() {
+        let doc = r"---
+name: mismatch
+model: gpt-4
+model_config:
+  model: gpt-4o
+---
+text";
+        let err = parse_agent_str(doc, Path::new("mismatch.md"), AgentSource::Project).unwrap_err();
+        assert!(matches!(
+            err,
+            ParserError::Validation(SubagentValidationError::ConflictingModelDefinitions { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_provider() {
+        let doc = r#"---
+name: bad
+model_config:
+  provider: "   "
+---
+text"#;
+        let err = parse_agent_str(doc, Path::new("bad.md"), AgentSource::Project).unwrap_err();
+        assert!(matches!(
+            err,
+            ParserError::Validation(SubagentValidationError::InvalidModelProvider)
+        ));
     }
 }

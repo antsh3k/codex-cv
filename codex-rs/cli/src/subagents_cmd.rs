@@ -91,11 +91,12 @@ impl SubagentsCli {
                         prompt,
                         |msg| match msg {
                             EventMsg::SubAgentStarted(ev) => {
-                                let model = ev.model.as_deref().unwrap_or("<session default>");
+                                let runtime_model =
+                                    describe_model(&spec.metadata, ev.model.as_deref());
                                 println!(
                                     "  {} {}",
                                     "started".dimmed(),
-                                    format!("model: {model}").dimmed()
+                                    format!("model: {runtime_model}").dimmed()
                                 );
                             }
                             EventMsg::SubAgentMessage(ev) => {
@@ -217,6 +218,34 @@ fn format_duration(ms: u64) -> String {
     }
 }
 
+fn describe_model(
+    metadata: &codex_subagents::SubagentMetadata,
+    runtime_model: Option<&str>,
+) -> String {
+    let provider = metadata
+        .model_config
+        .as_ref()
+        .and_then(|binding| binding.provider_id.as_deref());
+    let endpoint = metadata
+        .model_config
+        .as_ref()
+        .and_then(|binding| binding.endpoint.as_deref());
+    let chosen_model = runtime_model.or(metadata.model.as_deref());
+
+    let mut summary = match (provider, chosen_model) {
+        (Some(provider), Some(model)) => format!("{provider}/{model}"),
+        (Some(provider), None) => format!("{provider} (session default)"),
+        (None, Some(model)) => model.to_string(),
+        (None, None) => "<session default>".to_string(),
+    };
+
+    if let Some(endpoint) = endpoint {
+        summary = format!("{summary} @ {endpoint}");
+    }
+
+    summary
+}
+
 fn render_snapshot(snapshot: &RegistrySnapshot) {
     if snapshot.agents.is_empty() {
         println!("{}", "No subagents found.".yellow());
@@ -228,7 +257,7 @@ fn render_snapshot(snapshot: &RegistrySnapshot) {
         for handle in &snapshot.agents {
             let metadata = &handle.spec.metadata;
             let source = handle.spec.source.describe();
-            let model = metadata.model.as_deref().unwrap_or("<session default>");
+            let model_summary = describe_model(metadata, None);
             let tools = if metadata.tools.is_empty() {
                 "(none)".to_string()
             } else {
@@ -238,7 +267,7 @@ fn render_snapshot(snapshot: &RegistrySnapshot) {
             if let Some(desc) = metadata.description.as_ref() {
                 println!("      {desc}");
             }
-            println!("      model: {model}");
+            println!("      model: {model_summary}");
             println!("      tools: {tools}");
             if !metadata.keywords.is_empty() {
                 println!("      keywords: {}", metadata.keywords.join(", "));

@@ -1,5 +1,7 @@
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value as JsonValue;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -23,6 +25,18 @@ impl AgentSource {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ModelBinding {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub parameters: BTreeMap<String, JsonValue>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SubagentMetadata {
     pub name: String,
@@ -30,6 +44,8 @@ pub struct SubagentMetadata {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_config: Option<ModelBinding>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -42,6 +58,7 @@ impl SubagentMetadata {
             name,
             description: None,
             model: None,
+            model_config: None,
             tools: Vec::new(),
             keywords: Vec::new(),
         }
@@ -54,6 +71,11 @@ impl SubagentMetadata {
 
     pub fn model(mut self, model: Option<String>) -> Self {
         self.model = model;
+        self
+    }
+
+    pub fn model_config(mut self, config: Option<ModelBinding>) -> Self {
+        self.model_config = config;
         self
     }
 

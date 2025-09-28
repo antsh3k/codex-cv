@@ -127,10 +127,29 @@ keywords: [review, code review, lints]  # optional; used by auto_route heuristic
 Detailed instructions for the reviewer agent go here in Markdown.
 ```
 
+To bind a subagent to a different provider—such as a local Ollama instance exposed through the built-in `oss` provider—use the structured `model_config` block:
+
+```markdown
+---
+name: code-reviewer-ollama
+description: Reviews diffs using a local gpt-oss model
+model_config:
+  provider: oss
+  model: gpt-oss:20b
+  endpoint: http://localhost:11434/v1
+  parameters:
+    temperature: 0.0
+tools: [apply_patch]
+---
+
+You run entirely against the local Ollama server. Flag risky changes and suggest fixes.
+```
+
 Fields:
 - `name` (string, required): unique per registry; project definitions override user ones when names collide.
 - `description` (string): short summary for listings.
 - `model` (string, optional): per‑agent model override. If invalid or missing, the session model is used.
+- `model_config` (object, optional): structured provider binding for advanced scenarios. Supports `provider` (e.g., `oss` for Ollama), `model`, `endpoint` overrides, and a free-form `parameters` map. The legacy `model` string is treated as shorthand for `model_config.model`.
 - `tools` (string[]; optional): strict allowlist of built‑in tools (e.g., `local_shell`, `apply_patch`, `view_image`). MCP tools can be referenced later using `mcp:<server>:<tool>`; initial implementation may focus on built‑ins for simplicity.
 - `keywords` (string[]; optional): phrases used by simple NL routing when `subagents.auto_route=true`.
 

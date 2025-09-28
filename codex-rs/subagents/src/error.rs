@@ -16,6 +16,14 @@ pub enum SubagentValidationError {
     EmptyTool,
     #[error("keywords must be non-empty strings")]
     EmptyKeyword,
+    #[error("model_config.provider must be a non-empty string when set")]
+    InvalidModelProvider,
+    #[error("model_config.endpoint must be a non-empty string when set")]
+    InvalidModelEndpoint,
+    #[error("model_config.parameters keys must be non-empty strings")]
+    InvalidModelParameterKey,
+    #[error("model `{model}` conflicts with model_config.model `{model_config}`")]
+    ConflictingModelDefinitions { model: String, model_config: String },
 }
 
 #[derive(Debug, Error)]

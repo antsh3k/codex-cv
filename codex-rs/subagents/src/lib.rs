@@ -28,6 +28,7 @@ pub use registry::SubagentRegistry;
 pub use reviewer::ReviewerOutput;
 pub use reviewer::ReviewerSubagent;
 pub use spec::AgentSource;
+pub use spec::ModelBinding;
 pub use spec::SubagentMetadata;
 pub use spec::SubagentSpec;
 pub use spec_parser::SpecParserOutput;

@@ -18,6 +18,7 @@ use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::RolloutItem;
+use codex_subagents::ModelBinding;
 use codex_subagents::SubagentSpec;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -64,7 +65,9 @@ impl ConversationManager {
         spec: &SubagentSpec,
     ) -> CodexResult<NewConversation> {
         let mut child_config = parent_config.clone();
-        if let Some(model) = spec.metadata.model.as_ref() {
+        if let Some(binding) = spec.metadata.model_config.as_ref() {
+            apply_model_binding(&mut child_config, binding);
+        } else if let Some(model) = spec.metadata.model.as_ref() {
             child_config.model = model.clone();
             child_config.review_model = model.clone();
         }
@@ -193,6 +196,37 @@ impl ConversationManager {
         } = Codex::spawn(config, auth_manager, history).await?;
 
         self.finalize_spawn(codex, conversation_id).await
+    }
+}
+
+fn apply_model_binding(config: &mut Config, binding: &ModelBinding) {
+    if let Some(provider_id) = binding.provider_id.as_ref() {
+        if let Some(mut provider) = config.model_providers.get(provider_id).cloned() {
+            if let Some(endpoint) = binding.endpoint.as_ref() {
+                provider.base_url = Some(endpoint.clone());
+            }
+            config.model_provider_id = provider_id.clone();
+            config.model_provider = provider.clone();
+            config.model_providers.insert(provider_id.clone(), provider);
+        } else {
+            tracing::warn!(
+                provider = provider_id.as_str(),
+                agent = config.subagents.active_agent.as_deref(),
+                "Subagent requested unknown model provider `{}`; falling back to parent provider",
+                provider_id
+            );
+        }
+    } else if let Some(endpoint) = binding.endpoint.as_ref() {
+        let mut provider = config.model_provider.clone();
+        provider.base_url = Some(endpoint.clone());
+        let provider_id = config.model_provider_id.clone();
+        config.model_providers.insert(provider_id, provider.clone());
+        config.model_provider = provider;
+    }
+
+    if let Some(model) = binding.model.as_ref() {
+        config.model = model.clone();
+        config.review_model = model.clone();
     }
 }
 
@@ -391,6 +425,69 @@ mod tests {
 
         let merged_none = super::merge_subagent_instructions(None, "agent");
         assert_eq!(merged_none, "agent");
+    }
+
+    #[test]
+    fn apply_model_binding_switches_provider_and_model() {
+        let codex_home = tempdir().expect("tempdir");
+        let mut config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load config");
+
+        assert_eq!(config.model_provider_id, "openai");
+
+        let binding = ModelBinding {
+            provider_id: Some("oss".to_string()),
+            model: Some("gpt-oss:9b".to_string()),
+            endpoint: Some("http://localhost:11434/v1".to_string()),
+            parameters: std::collections::BTreeMap::new(),
+        };
+
+        apply_model_binding(&mut config, &binding);
+
+        assert_eq!(config.model_provider_id, "oss");
+        assert_eq!(config.model, "gpt-oss:9b");
+        assert_eq!(config.review_model, "gpt-oss:9b");
+        let provider = config.model_providers.get("oss").expect("provider");
+        assert_eq!(
+            provider.base_url.as_deref(),
+            Some("http://localhost:11434/v1")
+        );
+    }
+
+    #[test]
+    fn apply_model_binding_endpoint_only_updates_base_url() {
+        let codex_home = tempdir().expect("tempdir");
+        let mut config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load config");
+        let binding = ModelBinding {
+            provider_id: None,
+            model: None,
+            endpoint: Some("https://example.com/v1".to_string()),
+            parameters: std::collections::BTreeMap::new(),
+        };
+
+        let previous_model = config.model.clone();
+        apply_model_binding(&mut config, &binding);
+
+        assert_eq!(config.model, previous_model);
+        assert_eq!(config.review_model, previous_model);
+        assert_eq!(
+            config.model_provider.base_url.as_deref(),
+            Some("https://example.com/v1")
+        );
+        let provider = config
+            .model_providers
+            .get(&config.model_provider_id)
+            .expect("provider");
+        assert_eq!(provider.base_url.as_deref(), Some("https://example.com/v1"));
     }
 
     #[test]
