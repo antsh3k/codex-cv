@@ -2,14 +2,14 @@
 
 **AI-powered specialist agents for coding tasks** - Delegate work to focused agents for code review, documentation, testing, and debugging.
 
-[![npm version](https://badge.fury.io/js/codex-subagents.svg)](https://www.npmjs.com/package/codex-subagents)
+[![npm version](https://badge.fury.io/js/@stat-guy%2Fcodex-subagents.svg)](https://www.npmjs.com/package/@stat-guy/codex-subagents)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## 🚀 Quick Start
 
 ```bash
 # Install globally
-npm install -g codex-subagents
+npm install -g @stat-guy/codex-subagents
 
 # Initialize configuration
 codex-subagents init

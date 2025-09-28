@@ -1,5 +1,5 @@
 {
-  "name": "codex-subagents",
+  "name": "@stat-guy/codex-subagents",
   "version": "1.0.0",
   "description": "AI subagents for specialized coding tasks - delegate work to focused agents for code review, documentation, testing, and debugging",
   "main": "lib/index.js",
@@ -14,7 +14,7 @@
     "test": "npm run test:rust && npm run test:js",
     "test:rust": "cd rust-cli && cargo test",
     "test:js": "node test/test-runner.js",
-    "prepare": "npm run build",
+    "prepare": "echo 'Binary already built'",
     "postinstall": "node scripts/postinstall.js"
   },
   "keywords": [
