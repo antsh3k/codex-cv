@@ -123,7 +123,7 @@ Savings compound across teams: a 10-person squad saves ~ $132K/year versus cloud
 
 
 ### Local Install & Startup (5 minutes)
-1. Clone this repo and enter the workspace: `git clone https://github.com/openai/codex.git && cd codex-cv`.
+1. Clone this repo and enter the workspace: `git clone https://github.com/antsh3k/codex-cv.git && cd codex-cv`.
 2. Build the hackathon binary: `cargo build -p codex-cli --release` (this compiles the new Subagents support).
 3. Enable Subagents and explore with the local build: set `CODEX_SUBAGENTS_ENABLED=1`, run `./codex-rs/target/release/codex subagents list`, then try `./codex-rs/target/release/codex subagents run reviewer --prompt "Audit the new subagent orchestrator"`.
 4. Customize on-site: add Markdown specs under `.codex/agents/` (see examples below) and share them with hackathon teammates for instant reuse.
@@ -137,7 +137,7 @@ Savings compound across teams: a 10-person squad saves ~ $132K/year versus cloud
 The Subagents capability showcased for CEREBRAL VALLEY × OPENAI ships ahead of the standard installers, so pull and build from source:
 
 ```bash
-git clone https://github.com/openai/codex.git
+git clone https://github.com/antsh3k/codex-cv.git
 cd codex-cv
 cargo build -p codex-cli --release
 ```
